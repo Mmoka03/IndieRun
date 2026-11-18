@@ -62,4 +62,4 @@ python tools/package_release.py
 - [초기 Git 이력 구성](docs/HISTORY.md)
 - [커밋·협업 규칙](CONTRIBUTING.md)
 
-공개 라이선스와 원격 저장소 공개 범위는 아직 정하지 않았습니다.
+소스와 개발 문서는 [GitHub 공개 저장소](https://github.com/Mmoka03/IndieRun)에서 관리합니다. 개인 게임·설정·백업과 배포 바이너리는 포함하지 않습니다. 공개 라이선스는 아직 정하지 않았습니다.
