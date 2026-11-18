@@ -175,7 +175,7 @@ public partial class MainWindow
         {
             try
             {
-                if(firstLaunch){if(game.Executable.Length==0)throw new IOException("실행 파일을 지정하세요.");PlayerStore.StartInfo(targets[0],game);}
+                if(single)PlayerStore.ValidateLaunchEdit(targets[0],playerDocument.Games.Single(g=>g.Id==game.Id),game,firstLaunch);
                 if(newImage!=null)
                 {
                     var folder=Path.Combine(destination,".indierun-art");BackupPaths.NoLinks(folder);Directory.CreateDirectory(folder);

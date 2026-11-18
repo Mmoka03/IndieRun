@@ -1,9 +1,17 @@
-﻿using System.IO;
+using System.IO;
 using System.Text.Json;
 namespace IndieRun;
 
 public static class CompositionPlan
 {
+    public static string? AnchorProblem(Package p,GamePlay? play=null)
+    {
+        if(p.ScopeReviewRequired)return "이전 범위 정보가 없습니다. 정리 화면에서 이동 범위를 확인하세요.";
+        if(p.IsRelatedContent)return null;
+        if(!Path.IsPathFullyQualified(p.DetectedRoot)||!p.Includes(p.DetectedRoot))return "본편 실행 폴더가 이동 범위에서 제외되어 있습니다. 게임 구성을 확인하세요.";
+        if(play?.Executable.Length>0&&!p.Includes(BackupPaths.Child(p.Source,play.Executable)))return "기본 실행 파일이 이동 범위에서 제외되어 있습니다. 게임 구성을 확인하세요.";
+        return null;
+    }
     static T Copy<T>(T value)=>JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value))!;
     public static string Label(string role)=>role switch{"related"=>"관련 콘텐츠","game"=>"별도 게임","exclude"=>"포함하지 않음",_=>"본편"};
     public static string Color(string role)=>role switch{"related"=>"Composition.Related","game"=>"Composition.Game","exclude"=>"Neutral",_=>"Accent"};
@@ -24,7 +32,7 @@ public static class CompositionPlan
     }
     public static List<Package> Apply(Package draft,List<Package> current,ScanSnapshot scan)
     {
-        draft.ValidateComposition();var result=Copy(current);var index=result.FindIndex(p=>p.Id==draft.Id);if(index<0)throw new IOException("선택한 게임을 찾지 못했습니다.");
+        draft.ValidateComposition();draft.ScopeReviewRequired=false;var result=Copy(current);var index=result.FindIndex(p=>p.Id==draft.Id);if(index<0)throw new IOException("선택한 게임을 찾지 못했습니다.");
         var old=result[index];
         foreach(var part in draft.Contents.Where(c=>c.Role=="related"))if(result.Any(p=>p.Id!=draft.Id&&GameScanner.Within(p.Source,Path.Combine(draft.Source,part.Path))))throw new IOException("다른 게임으로 등록된 폴더는 관련 콘텐츠로 바꾸지 않습니다.");
         foreach(var removed in old.Contents.Where(c=>c.Role is "game" or "exclude"&&!draft.Contents.Any(n=>n.Id==c.Id&&n.Role==c.Role)))
@@ -98,7 +106,7 @@ public static class CompositionPlan
     public static string Target(Package p,string root)=>p.PlannedContainer.Length==0?Path.Combine(root,p.Name):Path.Combine(root,p.PlannedContainer,p.Name);
     public static void Preflight(BackupEngine engine,List<Package> items,string root)
     {
-        foreach(var p in items){p.ValidateComposition();engine.Preflight([(p.Source,Target(p,root))]);}
+        foreach(var p in items){FolderPolicy.RequireEditable(p.Source);p.ValidateComposition();var anchor=AnchorProblem(p);if(anchor!=null)throw new IOException(anchor);engine.Preflight([(p.Source,Target(p,root))]);}
         for(var i=0;i<items.Count;i++)for(var j=i+1;j<items.Count;j++)
         {
             var a=items[i];var b=items[j];var ad=Target(a,root);var bd=Target(b,root);

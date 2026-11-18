@@ -78,6 +78,7 @@ public sealed class RenameBatch(string dataRoot)
         if(HasPending||new FolderRename(dataRoot).HasPending||File.Exists(new EditTransaction(dataRoot).Pending))throw new IOException("이전 변경을 먼저 복구하세요.");
         var errors=Problems(plan,targets,dataRoot);if(errors.Count>0)throw new IOException(string.Join("\n",errors));
         var items=Copy(targets.Where(t=>t.Name!=Path.GetFileName(t.Original)).ToList());if(items.Count==0)throw new IOException("변경할 폴더명을 입력하세요.");
+        foreach(var t in items)FolderRename.VerifyIdentities(plan,t.Original);
         foreach(var t in items){t.Current=t.Original;t.BackupId="";}
         var groups=items.Select(i=>new RenameGroup{Keys=[i.Key]}).ToList();
         for(int i=0;i<items.Count;i++)for(int j=i+1;j<items.Count;j++)

@@ -54,7 +54,7 @@ public sealed partial class BackupEngine
     {
         if(!Directory.Exists(Root))return [];
         BackupPaths.NoLinks(Root);FileStream? recoveryLock=null;
-        if(recoverInterrupted)try{recoveryLock=Acquire();}catch(IOException){}
+        if(recoverInterrupted)try{recoveryLock=Acquire();}catch(Exception ex)when(ex is IOException or UnauthorizedAccessException){}
         try
         {
             var jobs=new List<BackupJob>();
@@ -111,6 +111,8 @@ public sealed partial class BackupEngine
     }
     public async Task<BackupJob> CreateAsync(Package package,IEnumerable<TagDefinition> tags,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default,string reason="manual",string operationGroupId="")
     {
+        if(package.ScopeReviewRequired)throw new IOException("이전 범위 정보가 없습니다. 정리 화면에서 범위를 확인한 뒤 진행하세요.");
+        package=JsonSerializer.Deserialize<Package>(JsonSerializer.Serialize(package))!;package.RestoreAutomaticExclusions();
         var source=Path.GetFullPath(package.Source);var leaf=new DirectoryInfo(source).Name;
         if(source.Equals(Path.GetPathRoot(source),StringComparison.OrdinalIgnoreCase)||!BackupPaths.Relative(leaf))throw new IOException("게임 디렉터리를 선택해 주세요.");
         if(GameScanner.Within(Root,source)||GameScanner.Within(source,Root))throw new IOException("원본과 백업 위치는 서로 분리해야 합니다.");
@@ -122,6 +124,7 @@ public sealed partial class BackupEngine
     public async Task<BackupJob> ResumeAsync(string id,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default)
     {
         using var operation=Acquire();var job=Load(id);
+        if(job.WithoutBackup)throw new IOException("별도 백업이 없는 이동 기록입니다. 작업 기록에서 이동을 확인하세요.");
         if(Removed(job))throw new IOException("삭제한 백업은 재개할 수 없습니다.");
         if(job.Status=="Completed"||job.SourceVerified)throw new IOException("완료된 백업은 재개 대신 검증해 주세요.");
         if(GameScanner.Within(Root,job.SourceRoot)||GameScanner.Within(job.SourceRoot,Root))throw new IOException("원본과 백업 위치가 겹칩니다.");
@@ -181,6 +184,7 @@ public sealed partial class BackupEngine
     public async Task<BackupJob> VerifyAsync(string id,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default)
     {
         using var operation=Acquire();var job=Load(id);
+        if(job.WithoutBackup)throw new IOException("별도 백업이 없는 이동 기록입니다. 작업 기록에서 이동을 확인하세요.");
         if(Removed(job))throw new IOException("삭제한 백업은 검증할 수 없습니다.");
         if(!job.SourceVerified)throw new IOException("중단된 백업은 재개하여 원본 검증을 마쳐 주세요.");
         try{State(job,"Verifying");await VerifyPayload(job,Payload(job),progress,cancellation);State(job,"Completed");return job;}
@@ -210,18 +214,18 @@ public sealed partial class BackupEngine
         }
         return list.OrderByDescending(r=>r.CreatedUtc).ToList();
     }
-    public async Task<RestoreJob> RestoreAsync(string id,string parent,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default)
+    public async Task<RestoreJob> RestoreAsync(string id,string parent,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default,bool acknowledgeIncomplete=false)
     {
-        using var operation=Acquire();var job=Load(id);parent=Path.GetFullPath(parent);
-        var restore=new RestoreJob {BackupId=id};restore.TargetContainer=Path.Combine(parent,"restore-"+restore.Id);
+        using var operation=Acquire();var job=Load(id);if(job.WithoutBackup)throw new IOException("별도 백업이 없어 백업 복원을 사용할 수 없습니다.");if(job.LegacyIncomplete&&!acknowledgeIncomplete)throw new IOException("이전 버전에서 일부 폴더가 빠진 백업입니다. 누락된 데이터는 복원되지 않습니다. 확인 후 일부 파일 복원을 선택하세요.");parent=Path.GetFullPath(parent);
+        var restore=new RestoreJob {BackupId=id,IncompleteScopeAccepted=acknowledgeIncomplete};restore.TargetContainer=Path.Combine(parent,"restore-"+restore.Id);
         ValidateRestoreTarget(job,restore);SaveRestore(restore,"Preparing");return await RunRestore(job,restore,progress,cancellation);
     }
-    public async Task<RestoreJob> ResumeRestoreAsync(string id,string restoreId,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default)
+    public async Task<RestoreJob> ResumeRestoreAsync(string id,string restoreId,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default,bool acknowledgeIncomplete=false)
     {
         using var operation=Acquire();if(!BackupPaths.Id(restoreId))throw new InvalidDataException("잘못된 복원 ID입니다.");
         var restore=BackupJson.Load<RestoreJob>(Path.Combine(JobDirectory(id),"restores",restoreId+".json"),ValidateRestore);
         if(restore.BackupId!=id||restore.Id!=restoreId||restore.Status=="Completed")throw new IOException("재개할 복원 작업을 확인해 주세요.");
-        var job=Load(id);ValidateRestoreTarget(job,restore);return await RunRestore(job,restore,progress,cancellation);
+        var job=Load(id);if(job.WithoutBackup)throw new IOException("별도 백업이 없어 백업 복원을 사용할 수 없습니다.");if(acknowledgeIncomplete)restore.IncompleteScopeAccepted=true;ValidateRestoreTarget(job,restore);return await RunRestore(job,restore,progress,cancellation);
     }
     void ValidateRestoreTarget(BackupJob job,RestoreJob restore)
     {
@@ -232,10 +236,10 @@ public sealed partial class BackupEngine
     {
         try
         {
+            if(job.LegacyIncomplete&&!restore.IncompleteScopeAccepted)throw new IOException("이전 버전의 일부 폴더 백업입니다. 누락 범위를 확인한 뒤 복원을 재개하세요.");
             if(job.Status!="Completed"||!job.SourceVerified)throw new IOException("검증 완료된 백업만 복원할 수 있습니다.");
             try{await VerifyPayload(job,Payload(job),progress,token);}
             catch(IOException ex){Failure(job,ex,"Invalid");throw;}
-            Space(restore.TargetContainer,job.TotalBytes);
             var marker=Path.Combine(restore.TargetContainer,"restore-owner.json");
             if(Directory.Exists(restore.TargetContainer)&&Directory.EnumerateFileSystemEntries(restore.TargetContainer).Any())
             {
@@ -246,6 +250,16 @@ public sealed partial class BackupEngine
             foreach(var directory in job.Directories){var path=BackupPaths.Child(target,directory);BackupPaths.NoLinks(path);Directory.CreateDirectory(path);}
             var existing=Index(target,token);
             if(existing.Files.Any(f=>!job.Files.Any(expected=>expected.RelativePath.Equals(Path.GetRelativePath(target,f.Path),StringComparison.OrdinalIgnoreCase)))||existing.Directories.Where(d=>!d.Equals(target,StringComparison.OrdinalIgnoreCase)).Any(d=>!job.Directories.Contains(Path.GetRelativePath(target,d),StringComparer.OrdinalIgnoreCase)))throw new IOException("복원 위치에 예상하지 못한 파일이 있습니다. 새 위치를 선택해 주세요.");
+            // A resumed restore already occupies disk space. Only complete, verified files
+            // reduce the remaining requirement; partial staging files are never trusted.
+            long remaining=0;
+            foreach(var file in job.Files)
+            {
+                token.ThrowIfCancellationRequested();var dest=BackupPaths.Child(target,file.RelativePath);
+                if(!File.Exists(dest)){remaining=checked(remaining+file.Length);continue;}
+                if(new FileInfo(dest).Length!=file.Length||await Hash(dest,token)!=file.Sha256)throw new IOException("기존 복원 파일이 변경됐습니다. 덮어쓰지 않습니다: "+file.RelativePath);
+            }
+            Space(restore.TargetContainer,remaining);
             SaveRestore(restore,"Restoring");var done=0;long bytes=0;
             foreach(var file in job.Files)
             {

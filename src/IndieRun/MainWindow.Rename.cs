@@ -74,7 +74,7 @@ public partial class MainWindow
                 if(!pending&&Directory.Exists(t.Current))
                 {
                     var actions=new WrapPanel{Margin=new Thickness(0,10,0,0)};if(p!=null)actions.Children.Add(Btn("게임 실행",()=>LaunchGame(p)));actions.Children.Add(Btn("폴더 열기",()=>OpenSourceFolder(t.Current)));
-                    if(t.BackupId.Length>0){var ack=Btn("정상 작동 확인",()=>{});try{if(new BackupEngine(record.Current.Plan.BackupRoot).Load(t.BackupId).ExecutionConfirmedUtc.HasValue){ack.Content="실행 확인됨";ack.IsEnabled=false;}}catch(Exception ex)when(LibraryFault(ex)){ack.IsEnabled=false;}ack.Click+=(_,_)=>{try{new BackupEngine(record.Current.Plan.BackupRoot).ConfirmExecution(t.BackupId,true);ack.Content="실행 확인됨";ack.IsEnabled=false;}catch(Exception ex)when(LibraryFault(ex)){ErrorInfo("실행 확인 표시","확인 표시를 저장하지 못했습니다.",ex.Message);}};actions.Children.Add(ack);}panel.Children.Add(actions);
+                    if(t.BackupId.Length>0){var ack=Btn("정상 작동 확인 표시",()=>{});try{if(new BackupEngine(record.Current.Plan.BackupRoot).Load(t.BackupId).ExecutionConfirmedUtc.HasValue){ack.Content="사용자 확인 완료";ack.IsEnabled=false;}}catch(Exception ex)when(LibraryFault(ex)){ack.IsEnabled=false;}ack.Click+=(_,_)=>{try{new BackupEngine(record.Current.Plan.BackupRoot).ConfirmExecution(t.BackupId,true);ack.Content="사용자 확인 완료";ack.IsEnabled=false;}catch(Exception ex)when(LibraryFault(ex)){ErrorInfo("실행 확인 표시","확인 표시를 저장하지 못했습니다.",ex.Message);}};actions.Children.Add(ack);}panel.Children.Add(actions);
                 }
                 panel.Children.Add(WorkDetails("원래 위치: "+t.Original+"\n현재 기록: "+t.Current,"위치"));rows.Children.Add(WorkCard(panel));
             }

@@ -44,6 +44,7 @@ public sealed record WorkspaceLoad(WorkspaceDocument? Document,bool Recovered,st
 
 public sealed class WorkspaceStore(string file)
 {
+    public const long MaxFileBytes=512L*1024*1024;
     public string FilePath => file;
     static readonly JsonSerializerOptions JsonOptions=new(){WriteIndented=true,Encoder=JavaScriptEncoder.UnsafeRelaxedJsonEscaping};
     public FileStream AcquireLock()
@@ -61,9 +62,10 @@ public sealed class WorkspaceStore(string file)
         if(doc.Checkpoints.Any(c=>c==null)||doc.Packages.GroupBy(p=>p.Id).Any(g=>g.Count()>1)||doc.Checkpoints.GroupBy(c=>c.PackageId).Any(g=>g.Count()>1))throw new InvalidDataException("중복 또는 잘못된 식별자가 있습니다.");
         if(doc.Packages.Any(p=>p.ScopeHistory==null||p.ScopeHistory.Count>200||p.ScopeHistory.Any(path=>!Path.IsPathFullyQualified(path)||!GameScanner.Within(path,p.SearchRoot)||!GameScanner.Within(p.DetectedRoot,path))))throw new InvalidDataException("범위 변경 기록이 올바르지 않습니다.");
         if(doc.Packages.Any(p=>!System.Text.RegularExpressions.Regex.IsMatch(p.Color,@"^#[0-9a-fA-F]{6}$")))throw new InvalidDataException("색상 기록이 올바르지 않습니다.");
+        var packagesById=doc.Packages.ToDictionary(p=>p.Id,StringComparer.Ordinal);
         foreach(var checkpoint in doc.Checkpoints)
         {
-            var p=doc.Packages.Find(p=>p.Id==checkpoint.PackageId);
+            var p=packagesById.GetValueOrDefault(checkpoint.PackageId);
             if(p==null||!Path.IsPathFullyQualified(checkpoint.Source)||!checkpoint.Source.Equals(p.Source,StringComparison.OrdinalIgnoreCase)||checkpoint.Files==null||checkpoint.Directories==null||checkpoint.Files.Any(f=>f==null||f.Length<0||!SafeRelative(f.RelativePath))||checkpoint.Directories.Any(d=>!SafeRelative(d)))throw new InvalidDataException("확인 기준이 올바르지 않습니다.");
             if(checkpoint.Files.GroupBy(f=>f.RelativePath,StringComparer.OrdinalIgnoreCase).Any(g=>g.Count()>1))throw new InvalidDataException("중복 파일 기록이 있습니다.");
         }
@@ -72,8 +74,9 @@ public sealed class WorkspaceStore(string file)
     static bool SafeRelative(string? path) => !string.IsNullOrWhiteSpace(path)&&!Path.IsPathRooted(path)&&!path.Split('\\','/').Any(part=>part is ".." or ".");
     WorkspaceDocument Read(string path)
     {
-        var info=new FileInfo(path);if(info.Length>128L*1024*1024)throw new InvalidDataException("계획 파일이 너무 큽니다.");
-        var doc=JsonSerializer.Deserialize<WorkspaceDocument>(System.IO.File.ReadAllText(path,Encoding.UTF8))??throw new InvalidDataException("빈 계획입니다.");Validate(doc);return doc;
+        var info=new FileInfo(path);if(info.Length>MaxFileBytes)throw new InvalidDataException("계획 파일이 너무 큽니다.");
+        using var input=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);
+        var doc=JsonSerializer.Deserialize<WorkspaceDocument>(input)??throw new InvalidDataException("빈 계획입니다.");Validate(doc);return doc;
     }
     public WorkspaceLoad Load()
     {
@@ -81,12 +84,12 @@ public sealed class WorkspaceStore(string file)
         if(System.IO.File.Exists(file))
         {
             try{return new(Read(file),false,null);}
-            catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException){error=ex.Message;}
+            catch(Exception ex) when(ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException){error=ex.Message;}
         }
         if(System.IO.File.Exists(file+".bak"))
         {
             try{return new(Read(file+".bak"),true,error);}
-            catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException){error??=ex.Message;}
+            catch(Exception ex) when(ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException){error??=ex.Message;}
         }
         return new(null,false,error);
     }
@@ -104,12 +107,12 @@ public sealed class WorkspaceStore(string file)
         Validate(doc);Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         var temp=file+".tmp";
         using(var stream=new FileStream(temp,FileMode.Create,FileAccess.Write,FileShare.None))
-        {checkpoint?.Invoke("temporary-opened");JsonSerializer.Serialize(stream,doc,JsonOptions);stream.Flush(true);}
+        {checkpoint?.Invoke("temporary-opened");JsonSerializer.Serialize(stream,doc,JsonOptions);if(stream.Length>MaxFileBytes)throw new InvalidDataException("계획 파일이 너무 큽니다.");stream.Flush(true);}
         checkpoint?.Invoke("temporary-flushed");
         if(!System.IO.File.Exists(file)){System.IO.File.Move(temp,file);checkpoint?.Invoke("committed");return;}
         var valid=true;
         try{Read(file);}
-        catch(Exception ex) when(ex is IOException or JsonException or ArgumentException or NotSupportedException){valid=false;}
+        catch(Exception ex) when(ex is IOException or InvalidDataException or JsonException or ArgumentException or NotSupportedException){valid=false;}
         var backup=valid?file+".bak":file+".invalid-"+Guid.NewGuid().ToString("N")+".json";
         System.IO.File.Replace(temp,file,backup,true);
         checkpoint?.Invoke("committed");

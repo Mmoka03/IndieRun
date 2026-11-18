@@ -27,8 +27,13 @@ public partial class MainWindow
                 // Existing launch settings belong to the user, even when the folder is newly discovered.
                 if(!players.Games.Any(g=>g.Id==p.Id))players.Games.Add(play);
                 var plan=Clone(CaptureWorkspace());var index=plan.Packages.FindIndex(q=>q.Id==p.Id);plan.Packages[index]=draft;plan.Tags=tags.Tags;
+                // The imported scope and its checkpoint must become visible and durable together.
+                var importedCheck=WorkspaceReconciler.Capture(draft,scan);
+                plan.Checkpoints.RemoveAll(c=>c.PackageId==p.Id);plan.Checkpoints.Add(importedCheck);
                 Edits().Commit(new(){Plan=plan,Tags=tags,Play=players,EditedIds=[p.Id],ImportedIds=[p.Id]});
-                p.IsContent=draft.IsContent;p.ContentOwnerId=draft.ContentOwnerId;p.CompositionParentId=draft.CompositionParentId;p.Contents=draft.Contents;p.RelatedFolders=draft.RelatedFolders;p.Alias=draft.Alias;p.Genres=draft.Genres;p.Categories=draft.Categories;p.GenreIds=draft.GenreIds;p.CategoryIds=draft.CategoryIds;p.Registered=true;p.PortableMetadata=true;catalog=tags;libraryDocument=Library().Load();playerDocument=players;playerRoot=destination;portableErrors.Remove(p.Id);
+                p.IsContent=draft.IsContent;p.ContentOwnerId=draft.ContentOwnerId;p.CompositionParentId=draft.CompositionParentId;p.Contents=draft.Contents;p.RelatedFolders=draft.RelatedFolders;p.OmittedFolders=draft.OmittedFolders;p.ScopeReviewRequired=draft.ScopeReviewRequired;p.Alias=draft.Alias;p.Genres=draft.Genres;p.Categories=draft.Categories;p.GenreIds=draft.GenreIds;p.CategoryIds=draft.CategoryIds;p.Registered=true;p.PortableMetadata=true;
+                checkpoints.RemoveAll(c=>c.PackageId==p.Id);checkpoints.Add(importedCheck);WorkspaceReconciler.Check(p,importedCheck,scan);
+                catalog=tags;libraryDocument=Library().Load();IdentityReconciler.Flag(p,identityInventory,libraryDocument);playerDocument=players;playerRoot=destination;portableErrors.Remove(p.Id);
             }
             catch(Exception ex) when(LibraryFault(ex)){portableErrors[p.Id]=ex.Message;if(File.Exists(Edits().Pending)){workspaceBlocked=true;break;}}
         }
@@ -36,6 +41,7 @@ public partial class MainWindow
     void RetryPortable_Click(object sender,RoutedEventArgs e)
     {
         if(!HasSelection||backupBusy||running||scanning||workspaceBlocked)return;
+        if(snapshot==null){Info("게임 정보 파일 확인","상단의 ‘다시 검색’으로 폴더를 확인한 뒤 다시 시도하세요.");return;}
         try
         {
             if(selected.PortableMetadata){SyncPortableMetadata();if(portableErrors.ContainsKey(selected.Id))throw new IOException(portableErrors[selected.Id]);}

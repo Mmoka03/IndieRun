@@ -1,20 +1,42 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 namespace IndieRun;
 public sealed class Package
 {
+    [JsonIgnore] public List<string> AddedExecutables {get;set;}=[];
+    public bool ScopeReviewRequired {get;set;}
     public bool IsContent {get;set;}
     [JsonIgnore] public bool IsRelatedContent=>IsContent||ContentOwnerId.Length>0;
     public List<FolderAssignment> Contents {get;set;}=[];
     public List<RelatedFolder> RelatedFolders {get;set;}=[];
     public List<string> OmittedFolders {get;set;}=[];
+    // Legacy automatic exclusions. Kept only to migrate old workspaces and reject unsafe journal replay.
+    public List<string> CandidateOmissions {get;set;}=[];
+    public void RestoreAutomaticExclusions()
+    {
+        var automatic=CandidateOmissions.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var explicitPaths=Contents.Where(c=>c.Role is "game" or "exclude").Select(c=>c.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        OmittedFolders.RemoveAll(r=>automatic.Contains(r)&&!explicitPaths.Contains(r));CandidateOmissions.Clear();
+    }
     public string CompositionMoveState {get;set;}="";
     public string PlannedContainer {get;set;}="";
     public string ContentOwnerId {get;set;}="";
     public string CompositionParentId {get;set;}="";
     public bool Includes(string path)=>GameScanner.Within(path,Source)&&!OmittedFolders.Any(r=>GameScanner.Within(path,System.IO.Path.Combine(Source,r)));
+    public Func<string,bool> Inclusion()
+    {
+        var root=System.IO.Path.GetFullPath(Source);var omitted=OmittedFolders.Select(r=>System.IO.Path.GetFullPath(System.IO.Path.Combine(root,r))).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return path=>
+        {
+            if(!GameScanner.Within(path,root))return false;
+            for(var current=System.IO.Path.GetFullPath(path);current!=null;current=System.IO.Path.GetDirectoryName(current))
+            {if(omitted.Contains(current))return false;if(current.Equals(root,StringComparison.OrdinalIgnoreCase))break;}
+            return true;
+        };
+    }
     public void ValidateComposition()
     {
         bool Relative(string r)=>!string.IsNullOrWhiteSpace(r)&&!System.IO.Path.IsPathRooted(r)&&r.Split('\\','/').All(c=>c.Length>0&&c is not ("." or "..")&&c.IndexOfAny(System.IO.Path.GetInvalidFileNameChars())<0);
+        if(CandidateOmissions==null||CandidateOmissions.Any(r=>!Relative(r)))throw new System.IO.InvalidDataException("탐지된 하위 게임 범위를 확인하세요.");
         if(Contents==null||RelatedFolders==null||OmittedFolders==null||PlannedContainer==null||(PlannedContainer.Length>0&&!Relative(PlannedContainer))||ContentOwnerId==null||CompositionParentId==null||(ContentOwnerId.Length>0&&!Guid.TryParseExact(ContentOwnerId,"N",out _))||(CompositionParentId.Length>0&&!Guid.TryParseExact(CompositionParentId,"N",out _))||Contents.Count>1000||RelatedFolders.Count>1000||Contents.Any(c=>c==null||c.Alias==null||c.Alias.Length>120||!Relative(c.Path)||c.Role is not ("related" or "game" or "exclude")||!Guid.TryParseExact(c.Id,"N",out _))||OmittedFolders.Any(r=>!Relative(r))||RelatedFolders.Any(r=>r==null||r.Alias==null||r.Alias.Length>120||!Guid.TryParseExact(r.Id,"N",out _)||!System.IO.Path.IsPathFullyQualified(r.Source)||string.IsNullOrWhiteSpace(r.Name)||r.Name.IndexOfAny(System.IO.Path.GetInvalidFileNameChars())>=0||r.Name is "." or "..")||Contents.GroupBy(c=>c.Path,StringComparer.OrdinalIgnoreCase).Any(g=>g.Count()>1)||RelatedFolders.GroupBy(r=>r.Id).Any(g=>g.Count()>1))throw new System.IO.InvalidDataException("게임 구성 정보를 확인하세요.");
     }
     // Null is a legacy workspace entry, which was already visible in the player.

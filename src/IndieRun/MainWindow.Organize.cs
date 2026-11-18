@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -16,7 +16,7 @@ public partial class MainWindow
     bool identityNoticeAccepted;
     int recentlyAdded;
     bool IsAdded(Package p)=>GameRegistration.IsAdded(p)||libraryDocument.Games.Any(g=>g.Id==p.Id);
-    bool NeedsCandidateReview(Package p)=>p.ReviewState.Length>0||registrationErrors.ContainsKey(p.Id)||!IsAdded(p)&&!Executables(p).Any(f=>!ExecutableCandidates.IsAuxiliary(f.Path));
+    bool NeedsCandidateReview(Package p)=>moveLocationIssues.ContainsKey(p.Id)||p.ReviewState.Length>0&&p.ReviewState!="cached"||registrationErrors.ContainsKey(p.Id)||p.ReviewState!="cached"&&!IsAdded(p)&&!Executables(p).Any(f=>!ExecutableCandidates.IsAuxiliary(f.Path));
     bool CanPick(Package p)=>p.IsReal&&!p.Excluded&&!p.IsRelatedContent&&p.ReviewState.Length==0&&(IsAdded(p)||Executables(p).Any(f=>!ExecutableCandidates.IsAuxiliary(f.Path)));
     static TextBlock OrganizeLabel(string text,double size=13,string color="Text.Primary")=>new(){Text=text,FontSize=size,Foreground=ThemeBrush(color),VerticalAlignment=VerticalAlignment.Center,TextTrimming=TextTrimming.CharacterEllipsis};
     static Border OrganizeChip(string text,string role="Accent")=>new(){Child=OrganizeLabel(text,11,role+".Text"),Background=ThemeBrush(role+".Surface"),CornerRadius=new CornerRadius(4),Padding=new Thickness(8,4,8,4),VerticalAlignment=VerticalAlignment.Center};
@@ -27,23 +27,23 @@ public partial class MainWindow
         OriginalPath.Text=HasSelection?"위치 · "+Path.GetFileName(Path.GetDirectoryName(selected.Source))+" / "+Path.GetFileName(selected.Source):"";OriginalPath.ToolTip=selected.Source;PackageLabel.Text="폴더 구조";
         PackageLayer.SetResourceReference(Border.BackgroundProperty,"Surface.Primary");PackageLayer.BorderThickness=new Thickness(0);TreeRows.Children.Clear();
         if(HasSelection&&selected.IsReal&&snapshot!=null)RenderScopeContext();
-        else TreeRows.Children.Add(WorkText(scanning?"폴더를 확인하고 있습니다…":"‘탐색 위치’에서 게임이 있는 폴더를 추가하세요.",13,"Text.Muted"));
+        else TreeRows.Children.Add(WorkText(scanning?"폴더를 확인하고 있습니다…":HasSelection?"게임 폴더를 확인하면 내용을 표시합니다.":"‘탐색 위치’에서 게임이 있는 폴더를 추가하세요.",13,"Text.Muted"));
         Alias.Text=selected.Alias;PhysicalName.Text=selected.Name;
         PreviewButton.IsEnabled=HasSelection&&!scanning&&!backupBusy;OrganizeInfoButton.Visibility=HasSelection&&IsAdded(selected)?Visibility.Visible:Visibility.Collapsed;
         var parent=HasSelection?Directory.GetParent(selected.Source)?.FullName:null;
         ScopeActions.Visibility=HasSelection&&!IsAdded(selected)&&selected.ReviewState.Length==0?Visibility.Visible:Visibility.Collapsed;
-        IncludeParentButton.Visibility=parent!=null&&GameScanner.Within(parent,selected.SearchRoot)&&!parent.Equals(selected.SearchRoot,StringComparison.OrdinalIgnoreCase)?Visibility.Visible:Visibility.Collapsed;
+        IncludeParentButton.Visibility=parent!=null&&GameScanner.Within(parent,selected.SearchRoot)&&FolderPolicy.RootAllowed(parent)?Visibility.Visible:Visibility.Collapsed;
         IncludeParentButton.IsEnabled=!scanning&&!backupBusy;IncludeParentButton.ToolTip=parent;
         ResetScopeButton.Visibility=selected.ScopeHistory.Count>0?Visibility.Visible:Visibility.Collapsed;
         OrganizeWarning.Visibility=Visibility.Collapsed;AddReviewedButton.Visibility=Visibility.Collapsed;
-        if(HasSelection&&!IsAdded(selected)&&selected.ReviewState.Length==0&&!Executables(selected).Any(f=>!ExecutableCandidates.IsAuxiliary(f.Path))){ShowOrganizeWarning("일반 실행 후보가 없습니다. 내용을 확인한 뒤 직접 추가할 수 있습니다.");AddReviewedButton.Visibility=Visibility.Visible;}
-        if(HasSelection&&registrationErrors.TryGetValue(selected.Id,out var error)){ShowOrganizeWarning("추가하지 못했습니다. 위치와 권한을 확인한 뒤 다시 시도하세요.");OrganizeWarning.ToolTip=error;}
+        if(HasSelection&&!IsAdded(selected)&&selected.ReviewState.Length==0&&!Executables(selected).Any(f=>!ExecutableCandidates.IsAuxiliary(f.Path))){ShowOrganizeWarning("실행 파일을 찾지 못했습니다. 내용을 확인한 뒤 등록할 수 있습니다.");AddReviewedButton.Visibility=Visibility.Visible;}
+        if(HasSelection&&registrationErrors.TryGetValue(selected.Id,out var error)){ShowOrganizeWarning("등록하지 못했습니다. 위치와 권한을 확인한 뒤 다시 시도하세요.");OrganizeWarning.ToolTip=error;}
         MoveSelectedButton.Visibility=HasSelection&&IsAdded(selected)&&scopeDraft==null?Visibility.Visible:Visibility.Collapsed;
-        MoveSelectedButton.IsEnabled=!backupBusy&&!scanning&&selected.ReviewState.Length==0;
+        MoveSelectedButton.IsEnabled=!backupBusy&&!scanning&&!running;
         OrganizeInfoButton.IsEnabled=!backupBusy&&!scanning;
-        OrganizeHint.Text=HasSelection&&selected.LocalRegistration?"식별 파일 없이 등록됨 · 위치를 바꾸면 직접 연결하세요.":"게임을 추가해도 폴더는 이동하지 않습니다.";
+        OrganizeHint.Text=HasSelection&&selected.LocalRegistration?"식별 파일 없이 등록됨 · 위치를 바꾸면 직접 연결하세요.":"";
         OrganizeHint.Visibility=HasSelection&&selected.LocalRegistration?Visibility.Visible:Visibility.Collapsed;
-        SelectedState.Text=!HasSelection?"":IsAdded(selected)?"추가됨":"추가할 범위";
+        SelectedState.Text=!HasSelection?"":IsAdded(selected)?"등록됨":"가져올 범위";
         SelectedState.SetResourceReference(ForegroundProperty,HasSelection&&IsAdded(selected)?"Success.Text":"Accent.Text");
         RetryPortableButton.Visibility=HasSelection&&portableErrors.ContainsKey(selected.Id)?Visibility.Visible:Visibility.Collapsed;
         if(RetryPortableButton.Visibility==Visibility.Visible){ShowOrganizeWarning("게임 정보 파일을 확인하지 못했습니다. 기존 게임과 설정은 유지됩니다.");OrganizeWarning.ToolTip=portableErrors[selected.Id];}
@@ -55,29 +55,31 @@ public partial class MainWindow
     {
         var offset=CandidateScroll.VerticalOffset;CandidateList.Children.Clear();CandidateReviewList.Children.Clear();
         organizeSelection.RemoveWhere(id=>!packages.Any(p=>p.Id==id&&!p.Excluded));
-        var query=Search.Text.Trim();var matching=packages.Where(p=>!p.Excluded&&!p.IsRelatedContent&&(p.Alias+p.Folder).Contains(query,StringComparison.OrdinalIgnoreCase)).ToList();CandidateCount.Text=$"{matching.Count}개";
+        var ownedRoots=packages.Where(p=>!p.Excluded&&FolderPolicy.OwnsScope(p)).Select(p=>Path.GetFullPath(p.Source)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var query=Search.Text.Trim();var matching=packages.Where(p=>!p.Excluded&&!p.IsRelatedContent&&(FolderPolicy.OwnsScope(p)||!ownedRoots.Contains(Path.GetFullPath(p.Source)))&&((p.Alias+p.Folder).Contains(query,StringComparison.OrdinalIgnoreCase)||moveLocationIssues.ContainsKey(p.Id)||recentMoveIds.Contains(p.Id))).OrderByDescending(p=>moveLocationIssues.ContainsKey(p.Id)||recentMoveIds.Contains(p.Id)).ToList();CandidateCount.Text=$"{matching.Count}개";
         foreach(var p in PageItems(matching,"organize",query,CandidateList,RenderCandidates))
         {
             var row=new Grid {Margin=new Thickness(0,0,0,8)};row.ColumnDefinitions.Add(new ColumnDefinition());row.ColumnDefinitions.Add(new ColumnDefinition {Width=new GridLength(48)});
             var body=new StackPanel();var header=new DockPanel {Height=26};
-            var status=organizeSelection.Contains(p.Id)?"선택됨":IsAdded(p)?"추가됨":NeedsCandidateReview(p)?"확인 필요":"";
-            var chip=OrganizeChip(status,organizeSelection.Contains(p.Id)?"Accent":IsAdded(p)?"Success":NeedsCandidateReview(p)?"Warning":"Accent");chip.Visibility=status.Length>0?Visibility.Visible:Visibility.Collapsed;DockPanel.SetDock(chip,Dock.Right);header.Children.Add(chip);
+            var status=moveLocationIssues.ContainsKey(p.Id)?"위치 확인":organizeSelection.Contains(p.Id)?"선택됨":recentMoveIds.Contains(p.Id)&&p.Done?"이동 완료":IsAdded(p)?"추가됨":NeedsCandidateReview(p)?"확인 필요":"";
+            var chip=OrganizeChip(status,moveLocationIssues.ContainsKey(p.Id)?"Warning":organizeSelection.Contains(p.Id)?"Accent":IsAdded(p)?"Success":NeedsCandidateReview(p)?"Warning":"Accent");chip.Visibility=status.Length>0?Visibility.Visible:Visibility.Collapsed;DockPanel.SetDock(chip,Dock.Right);header.Children.Add(chip);
             var title=OrganizeLabel(PlayerRules.Title(p),14);title.FontWeight=FontWeights.SemiBold;title.Margin=new Thickness(0,0,8,0);header.Children.Add(title);body.Children.Add(header);
             body.Children.Add(new TextBlock {Text=p.Folder,Foreground=ThemeBrush("Text.Muted"),FontSize=11,TextTrimming=TextTrimming.CharacterEllipsis,Margin=new Thickness(0,7,0,0)});
             body.Children.Add(new TextBlock {Text=p.Size,Foreground=ThemeBrush("Text.Muted"),FontSize=11,Margin=new Thickness(0,5,0,0)});
             var inspect=Btn("",()=>{if(!LeaveScopeEdit())return;selected=p;Render();});inspect.Content=body;inspect.HorizontalContentAlignment=HorizontalAlignment.Stretch;inspect.Margin=new Thickness(0);inspect.Padding=new Thickness(13);inspect.Background=ThemeBrush(organizeSelection.Contains(p.Id)?"Accent.Surface":"Surface.Primary");inspect.BorderBrush=ThemeBrush(p==selected?"Border.Focus":"Border.Subtle");inspect.ToolTip="폴더 구조 보기\n"+p.Source;AutomationProperties.SetName(inspect,PlayerRules.Title(p)+" 폴더 확인");
-            var menu=new ContextMenu();var composition=new MenuItem {Header="구성 수정"};composition.IsEnabled=!scanning&&!running&&!backupBusy&&p.ReviewState.Length==0;composition.Click+=(_,_)=>EditComposition(p);menu.Items.Add(composition);menu.Items.Add(new Separator());var exclude=new MenuItem {Header="이 계획에서 제외"};exclude.Click+=(_,_)=>ExcludeCandidate(p);menu.Items.Add(exclude);
+            var menu=new ContextMenu();if(moveLocationIssues.ContainsKey(p.Id)){var locate=new MenuItem{Header="이동 위치 확인"};locate.Click+=(_,_)=>ShowMoveLocationIssue(p);menu.Items.Add(locate);}var composition=new MenuItem {Header="구성 수정"};composition.IsEnabled=!scanning&&!running&&!backupBusy&&p.ReviewState is "" or "scope";composition.Click+=(_,_)=>EditComposition(p);menu.Items.Add(composition);menu.Items.Add(new Separator());var exclude=new MenuItem {Header="이 계획에서 제외"};exclude.Click+=(_,_)=>ExcludeCandidate(p);menu.Items.Add(exclude);
             if(!IsAdded(p)&&p.ReviewState.Length==0&&!CanPick(p))
-            {var explicitAdd=new MenuItem {Header="내용 확인 후 추가"};explicitAdd.Click+=(_,_)=>{if(Confirm("실행 후보 확인","일반 실행 후보가 없습니다. 내용을 확인한 게임만 추가하세요.","이 게임 추가",p.Source)){organizeSelection.Add(p.Id);AddGames_Click(this,new RoutedEventArgs());}};menu.Items.Add(explicitAdd);}
+            {var explicitAdd=new MenuItem {Header="내용 확인 후 등록"};explicitAdd.Click+=(_,_)=>{if(Confirm("실행 후보 확인","실행 파일을 찾지 못했습니다. 게임이 맞는지 확인한 뒤 등록하세요.","실행 목록에 등록",p.Source)){organizeSelection.Add(p.Id);AddGames_Click(this,new RoutedEventArgs());}};menu.Items.Add(explicitAdd);}
             inspect.ContextMenu=menu;row.Children.Add(inspect);
             if(CanPick(p)||!IsAdded(p)&&registrationErrors.ContainsKey(p.Id))
             {
                 var picked=organizeSelection.Contains(p.Id);var marker=new Grid {Width=26,Height=26};marker.Children.Add(new System.Windows.Shapes.Ellipse {Stroke=ThemeBrush(picked?"Accent.Fill":"Border.Hover"),Fill=ThemeBrush(picked?"Accent.Fill":"Surface.Primary"),StrokeThickness=1});
                 marker.Children.Add(new ShapePath {Data=Geometry.Parse(picked?"M 0,5 L 4,9 L 12,0":"M 6,0 L 6,12 M 0,6 L 12,6"),Stroke=ThemeBrush(picked?"Accent.OnFill":"Text.Secondary"),StrokeThickness=1.5,Width=12,Height=12,Stretch=Stretch.Uniform,HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center});
-                var pick=Btn("",()=>{if(!organizeSelection.Add(p.Id))organizeSelection.Remove(p.Id);RenderCandidates();RenderPlan();});pick.Content=marker;pick.Padding=new Thickness(0);pick.Margin=new Thickness(6,0,0,0);pick.BorderThickness=new Thickness(0);pick.Background=Brushes.Transparent;pick.ToolTip=picked?"선택 해제":IsAdded(p)?"이동할 게임 선택":"추가할 게임 선택";AutomationProperties.SetName(pick,PlayerRules.Title(p)+(picked?" 선택 해제":" 선택"));Grid.SetColumn(pick,1);row.Children.Add(pick);
+                var pick=Btn("",()=>{if(!organizeSelection.Add(p.Id))organizeSelection.Remove(p.Id);RenderCandidates();RenderPlan();});pick.Content=marker;pick.Padding=new Thickness(0);pick.Margin=new Thickness(6,0,0,0);pick.BorderThickness=new Thickness(0);pick.Background=Brushes.Transparent;pick.ToolTip=picked?"선택 해제":IsAdded(p)?"이동할 게임 선택":"가져올 게임 선택";AutomationProperties.SetName(pick,PlayerRules.Title(p)+(picked?" 선택 해제":" 선택"));Grid.SetColumn(pick,1);row.Children.Add(pick);
             }
             (NeedsCandidateReview(p)?CandidateReviewList:CandidateList).Children.Add(row);
         }
+        if(matching.Any(p=>moveLocationIssues.ContainsKey(p.Id)))CandidateReviewSection.IsExpanded=true;
         CandidateReviewSection.Header=$"확인 필요 · {CandidateReviewList.Children.Count}개";CandidateReviewSection.Visibility=CandidateReviewList.Children.Count>0?Visibility.Visible:Visibility.Collapsed;
         if(matching.Count==0)CandidateList.Children.Add(WorkText("일치하는 후보가 없습니다.",12,"Text.Muted"));
         CandidateScroll.ScrollToVerticalOffset(offset);
@@ -91,11 +93,11 @@ public partial class MainWindow
             AddGamesButton.Visibility=MovePickedButton.Visibility=ClearPickedButton.Visibility=ReviewButton.Visibility=ScopeUndoButton.Visibility=Visibility.Collapsed;return;
         }
         var chosen=packages.Where(p=>organizeSelection.Contains(p.Id)&&!p.Excluded).ToList();var add=chosen.Count(p=>!IsAdded(p));var move=chosen.Count(p=>IsAdded(p));
-        PlanCount.Text=chosen.Count>0?$"{chosen.Count}개 선택":"추가하거나 옮길 게임을 선택하세요";PlanHint.Visibility=chosen.Count>0?Visibility.Visible:Visibility.Collapsed;PlanHint.Text=chosen.Count==0?"":(move==0?"폴더 위치는 유지됩니다.":$"추가 {add}개 · 이동 {move}개");
+        PlanCount.Text=chosen.Count>0?$"{chosen.Count}개 선택":"가져올 게임을 선택하세요";PlanHint.Visibility=chosen.Count>0?Visibility.Visible:Visibility.Collapsed;PlanHint.Text=chosen.Count==0?"":"게임 가져오기에서 사용 방식을 선택하세요.";
         var ready=!scanning&&!backupBusy&&!running&&!workspaceBlocked&&playerError.Length==0&&!File.Exists(Edits().Pending)&&!(ScopeChanges().HasPending||RenamePending);
-        AddGamesButton.Content=add>0?$"게임 {add}개 추가":"선택한 게임 추가";AddGamesButton.Visibility=move>0&&add==0?Visibility.Collapsed:Visibility.Visible;AddGamesButton.IsEnabled=add>0&&ready&&scopeDraft==null;
-        MovePickedButton.Content=$"게임 {move}개 옮기기";MovePickedButton.Visibility=move>0?Visibility.Visible:Visibility.Collapsed;MovePickedButton.IsEnabled=move>0&&ready&&scopeDraft==null&&chosen.Where(IsAdded).All(p=>p.ReviewState.Length==0);
-        if(recentlyAdded>0&&chosen.Count==0){PlanCount.Text=$"게임 {recentlyAdded}개 추가";PlanHint.Text="폴더 위치는 유지됩니다.";PlanHint.Visibility=Visibility.Visible;AddGamesButton.Visibility=Visibility.Collapsed;}
+        AddGamesButton.Content="게임 가져오기";AddGamesButton.Visibility=move>0&&add==0?Visibility.Collapsed:Visibility.Visible;AddGamesButton.IsEnabled=add>0&&ready&&scopeDraft==null;
+        MovePickedButton.Content="보관함으로 옮기기";MovePickedButton.Visibility=chosen.Count>0&&add==0?Visibility.Visible:Visibility.Collapsed;MovePickedButton.IsEnabled=chosen.Count>0&&ready&&scopeDraft==null;
+        if(recentlyAdded>0&&chosen.Count==0){PlanCount.Text=$"게임 {recentlyAdded}개 등록 완료";PlanHint.Text="등록한 게임은 나중에 보관함으로 옮길 수 있습니다.";MovePickedButton.Visibility=Visibility.Visible;MovePickedButton.IsEnabled=ready;PlanHint.Visibility=Visibility.Visible;AddGamesButton.Visibility=Visibility.Collapsed;}
         ClearPickedButton.Visibility=chosen.Count>0?Visibility.Visible:Visibility.Collapsed;
         var planned=packages.Count(p=>!p.Excluded&&p.Planned&&!p.Done);ReviewButton.Visibility=planned>0?Visibility.Visible:Visibility.Collapsed;ReviewButton.Content=$"이동 계획 {planned}개 확인";ReviewButton.IsEnabled=ready&&scopeDraft==null;
         ScopeUndoButton.Visibility=page=="organize"&&history.Count>0&&scopeDraft==null?Visibility.Visible:Visibility.Collapsed;
@@ -103,30 +105,26 @@ public partial class MainWindow
     void PickAll_Click(object sender,RoutedEventArgs e)
     {if(running||scanning||backupBusy||scopeDraft!=null)return;var query=Search.Text.Trim();foreach(var p in packages.Where(p=>CanPick(p)&&(p.Alias+p.Folder).Contains(query,StringComparison.OrdinalIgnoreCase)))organizeSelection.Add(p.Id);RenderCandidates();RenderPlan();}
     void ClearPicked_Click(object sender,RoutedEventArgs e){organizeSelection.Clear();RenderCandidates();RenderPlan();}
-    void MovePicked_Click(object sender,RoutedEventArgs e)
-    {var list=packages.Where(p=>organizeSelection.Contains(p.Id)&&IsAdded(p)&&!p.Excluded).ToList();if(list.Count>0&&!running&&!scanning&&!backupBusy&&scopeDraft==null&&list.All(p=>p.ReviewState.Length==0))ShowReadOnlyPlan(list);}
+    async void MovePicked_Click(object sender,RoutedEventArgs e)
+    {var list=packages.Where(p=>!p.Excluded&&(organizeSelection.Contains(p.Id)||organizeSelection.Count==0&&recentlyRegisteredIds.Contains(p.Id))).ToList();await OpenTransferAsync(list);}
     void AddReviewed_Click(object sender,RoutedEventArgs e)
     {
         if(!HasSelection||IsAdded(selected)||selected.ReviewState.Length>0||backupBusy||scanning||running)return;
-        if(!Confirm("실행 후보 확인","일반 실행 후보가 없습니다. 내용을 확인한 게임만 추가하세요.","이 게임 추가",selected.Source))return;
+        if(!Confirm("실행 후보 확인","실행 파일을 찾지 못했습니다. 게임이 맞는지 확인한 뒤 등록하세요.","실행 목록에 등록",selected.Source))return;
         organizeSelection.Add(selected.Id);AddGames_Click(sender,e);
     }
     async void AddGames_Click(object sender,RoutedEventArgs e)
     {
         if(scanning||backupBusy||running||workspaceBlocked||scopeDraft!=null||organizeSelection.Count==0)return;
-        if(!identityNoticeAccepted)
-        {
-            if(!Confirm("게임 추가","폴더 위치는 유지하고, 게임을 구별하는 작은 식별 파일을 게임 폴더에 저장합니다.","추가", "식별 파일을 쓸 권한이 없는 폴더는 프로그램 내부에만 등록합니다. 이 경우 폴더 위치를 바꾸면 직접 다시 연결해야 합니다."))return;
-            identityNoticeAccepted=true;
-        }
-        await AddPickedGamesAsync();
+        await OpenIntakeAsync(packages.Where(p=>organizeSelection.Contains(p.Id)&&!p.Excluded).ToList());
     }
-    async Task AddPickedGamesAsync(bool showErrors=true)
+    Task AddPickedGamesAsync(bool showErrors=true)=>RegisterGamesAtLocationAsync(packages.Where(p=>organizeSelection.Contains(p.Id)&&!p.Excluded&&!IsAdded(p)).ToList(),showErrors);
+    async Task RegisterGamesAtLocationAsync(List<Package> requested,bool showErrors=true)
     {
         if(!identityNoticeAccepted||snapshot==null||workspaceBlocked||workspaceLock==null||playerError.Length>0||File.Exists(Edits().Pending))return;
-        var chosen=packages.Where(p=>organizeSelection.Contains(p.Id)&&!p.Excluded&&!IsAdded(p)).ToList();
+        var chosen=requested.Where(p=>!p.Excluded&&!IsAdded(p)).ToList();
         if(chosen.Count==0)return;
-        if(!FlushWorkspace()){Say("추가 전에 현재 작업을 저장해 주세요.");return;}
+        if(!FlushWorkspace()){ShowWorkspaceSaveIssue();return;}
         running=true;Workbench.IsEnabled=false;FooterActions.IsEnabled=false;RescanButton.IsEnabled=false;
         var navs=new[]{PlayerNav,OrganizeNav,TagsNav,JobsNav,LibraryNav};foreach(var nav in navs)nav.IsEnabled=false;
         int added=0,local=0;var failures=new List<string>();
@@ -138,19 +136,19 @@ public partial class MainWindow
                 if(RegisterGame(p,true)){added++;if(p.LocalRegistration)local++;organizeSelection.Remove(p.Id);}
                 else failures.Add(PlayerRules.Title(p)+": "+registrationErrors.GetValueOrDefault(p.Id,"폴더 위치와 상태를 확인하세요."));
             }
-            if(!FlushWorkspace()&&showErrors){ErrorInfo("추가 상태 저장","최근 추가 상태를 저장하지 못했습니다. 프로그램을 닫기 전에 저장을 다시 시도하세요.",SaveStatus.ToolTip?.ToString()??"");}
+            if(!FlushWorkspace()){registrationSaveFailed=true;if(showErrors)ErrorInfo("등록 정보 저장","등록 정보를 저장하지 못했습니다. 프로그램을 닫기 전에 저장을 다시 시도하세요.",SaveStatus.ToolTip?.ToString()??"");}
             if(playerRoot!=destination)LoadPlayer();
             foreach(var p in packages.Where(IsAdded))PlayFor(p);
             try{new PlayerStore(destination).Save(playerDocument);}
-            catch(Exception ex) when(LibraryFault(ex)){if(showErrors)ErrorInfo("실행 설정 저장","게임 추가는 유지했습니다. 실행 설정 저장을 다시 시도하세요.",ex.Message);}
-            recentlyAdded=added;Render();Say($"게임 {added}개 추가 · 폴더 위치 유지"+(failures.Count>0?$" · 확인 필요 {failures.Count}개":"")+(local>0?$" · 식별 파일 없이 등록 {local}개":""));
-            if(failures.Count>0&&showErrors)ErrorInfo("일부 게임 추가 확인","추가한 게임은 유지했습니다. 실패한 항목은 위치와 권한을 확인한 뒤 다시 시도하세요.",string.Join('\n',failures));
+            catch(Exception ex) when(LibraryFault(ex)){registrationSaveFailed=true;if(showErrors)ErrorInfo("실행 설정 저장","게임 등록은 유지됩니다. 실행 설정 저장을 다시 시도하세요.",ex.Message);}
+            recentlyAdded=added;recentlyRegisteredIds.Clear();foreach(var p in chosen.Where(IsAdded))recentlyRegisteredIds.Add(p.Id);Render();Say($"게임 {added}개를 실행 목록에 등록했습니다."+(failures.Count>0?$" · 확인 필요 {failures.Count}개":"")+(local>0?$" · 식별 파일 없이 등록 {local}개":""));
+            if(failures.Count>0&&showErrors)ErrorInfo("일부 게임 등록 실패","등록한 게임은 유지됩니다. 실패한 항목은 위치와 권한을 확인한 뒤 다시 시도하세요.",string.Join('\n',failures));
         }
         finally{running=false;Workbench.IsEnabled=true;FooterActions.IsEnabled=true;RescanButton.IsEnabled=true;foreach(var nav in navs)nav.IsEnabled=true;RenderPlan();}
     }
     void OpenAdded_Click(object sender,RoutedEventArgs e){recentlyAdded=0;SetPage("play");RenderPlayer();}
-    void MoveSelected_Click(object sender,RoutedEventArgs e)
-    {if(HasSelection&&IsAdded(selected)&&scopeDraft==null&&!scanning&&!backupBusy&&!running&&selected.ReviewState.Length==0)ShowReadOnlyPlan([selected]);}
+    async void MoveSelected_Click(object sender,RoutedEventArgs e)
+    {if(HasSelection)await OpenTransferAsync([selected]);}
     void Organize_KeyDown(object sender,KeyEventArgs e)
     {if(page=="organize"&&OwnedWindows.Count==0&&e.Key==Key.Z&&Keyboard.Modifiers==ModifierKeys.Control&&Keyboard.FocusedElement is not TextBoxBase){e.Handled=true;if(scopeDraft!=null){var previous=scopeDraftHistory.LastOrDefault();if(previous!=null)DraftScope(previous,false);}else Undo_Click(sender,e);}}
 

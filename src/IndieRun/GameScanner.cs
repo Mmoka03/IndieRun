@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -7,6 +7,8 @@ namespace IndieRun;
 public sealed record ScannedFile(string Path, long Length, DateTime ModifiedUtc);
 public sealed class ScanSnapshot
 {
+    public Dictionary<string,string> RecoveredRoots {get;}=new(StringComparer.OrdinalIgnoreCase);
+    public bool IsPartial {get;set;}
     public string Root { get; init; } = "";
     public List<string> SearchRoots {get;}=[];
     public List<string> InactivePaths {get;}=[];
@@ -103,7 +105,7 @@ public static class GameScanner
                     {
                         var attributes=File.GetAttributes(path);
                         budget?.Visit(path,(attributes&FileAttributes.Directory)!=0);
-                        if((attributes&FileAttributes.ReparsePoint)!=0){result.Issues.Add($"연결 항목 제외: {path}");continue;}
+                        if((attributes&FileAttributes.ReparsePoint)!=0){result.UnreadablePaths.Add(path);result.Issues.Add($"연결 항목 제외: {path}");continue;}
                         if((attributes&FileAttributes.Directory)!=0)
                         {
                             if(Path.GetFileName(path).Equals(MetadataDirectoryName,StringComparison.OrdinalIgnoreCase)||excluded.Any(e=>Within(path,e)))continue;

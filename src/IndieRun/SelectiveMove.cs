@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 namespace IndieRun;
 
 public sealed partial class BackupEngine
@@ -8,7 +8,7 @@ public sealed partial class BackupEngine
     async Task<MoveJob> RunSelectiveMove(BackupJob backup,MoveJob move,IProgress<BackupProgress>? progress,CancellationToken token)
     {
         if(backup.Status!="Completed"||!backup.SourceVerified)throw new IOException("검증 완료된 백업이 필요합니다.");
-        await VerifyPayload(backup,Payload(backup),progress,token);EnsureStage(move);
+        if(!backup.WithoutBackup)await VerifyPayload(backup,Payload(backup),progress,token);EnsureStage(move);
         var stage=StagePayload(move);
         if(!move.PublishIntent)
         {
@@ -28,6 +28,7 @@ public sealed partial class BackupEngine
         await VerifyOriginal(backup,move.Destination,token);
         move.SourceCaptured=true;MoveState(move,"Running","RemovingOriginal");
         await RemoveSelectedSource(backup,move,token);
+        progress?.Report(new BackupProgress("MoveVerifying",0,0,0,null));await VerifyOriginal(backup,move.Destination,token);RequireSourceDeparture(backup,move,token);
         MoveState(move,"Completed","Completed");Checkpoint?.Invoke("move-completed");return move;
     }
     async Task RemoveSelectedSource(BackupJob backup,MoveJob move,CancellationToken token)
@@ -59,15 +60,16 @@ public sealed partial class BackupEngine
         var published=move.PublishIntent&&!Directory.Exists(stage)&&Directory.Exists(move.Destination);
         if(!published&&!move.SourceCaptured)
         {
-            await VerifyOriginal(backup,move.Source,token);MoveState(move,"RolledBack","RolledBack");return move;
+            await VerifyOriginal(backup,move.Source,token);MoveState(move,"RolledBack","RolledBack");await CleanupMoveStage(backup,move,token);return move;
         }
         // User changes to a published game stop undo before any source restoration or deletion.
         if(published&&!move.UndoPrepared)await VerifyOriginal(backup,move.Destination,token);
-        await VerifyPayload(backup,Payload(backup),progress,token);EnsureStage(move);
+        var survivor=backup.WithoutBackup?(move.UndoPrepared?move.Source:move.Destination):Payload(backup);
+        if(backup.WithoutBackup)await VerifyOriginal(backup,survivor,token);else await VerifyPayload(backup,survivor,progress,token);EnsureStage(move);
         MoveState(move,"Running","RestoringOriginal");
-        await CopyTree(backup,Payload(backup),move.Source,move,progress,token,"RollingBack");
+        await CopyTree(backup,survivor,move.Source,move,progress,token,"RollingBack");
         move.UndoPrepared=true;MoveState(move,"Running","RemovingDestination");Checkpoint?.Invoke("selective-undo-prepared");
         if(published)await RemoveVerified(backup,move.Destination,move.Source,token);
-        move.SourceCaptured=false;MoveState(move,"RolledBack","RolledBack");return move;
+        move.SourceCaptured=false;MoveState(move,"RolledBack","RolledBack");await CleanupMoveStage(backup,move,token);return move;
     }
 }

@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
 
 namespace IndieRun;
@@ -35,10 +35,10 @@ public partial class MainWindow
         }
         else
         {
-            var note=WorkText(run.Failed>0||run.Stopped?"아래 기록에서 재개하거나 복구하세요. 만들어진 백업은 유지됩니다.":"만들어진 백업은 유지됩니다. 게임의 정상 작동을 확인한 뒤 직접 삭제하세요.",12);note.Margin=new Thickness(0,12,0,0);body.Children.Add(note);
+            var note=WorkText(run.SavePending>0?"파일 작업은 끝났습니다. 상단의 ‘저장 문제 확인’에서 다시 저장하세요.":run.NeedsAttention||run.Stopped?run.WithoutBackup?"아래 이동 기록에서 재개하거나 원래 위치로 되돌리세요. 별도 백업은 없습니다.":"아래 기록에서 재개하거나 복구하세요. 만들어진 백업은 유지됩니다.":run.WithoutBackup?"백업 없이 이동했습니다. 게임이 정상 작동하는지 확인하세요.":run.Name=="백업"?"백업을 완료했습니다. 백업은 직접 삭제할 때까지 보관합니다.":"게임이 정상 작동하는지 확인하세요. 생성한 백업은 직접 삭제할 때까지 유지됩니다.",12);note.Margin=new Thickness(0,12,0,0);body.Children.Add(note);
             body.Children.Add(WorkDetails(string.Join("\n\n",run.Items.Select(i=>$"{i.Title} · {OperationStatus.ItemLabel(i.State)}"+(i.Error==null?"":"\n"+i.Error))),"게임별 결과"));
         }
-        JobsSummary.Children.Add(WorkCard(body,run.Finished&&(run.Failed>0||run.Stopped)?"Warning.Surface":"Accent.Surface"));
+        JobsSummary.Children.Add(WorkCard(body,run.Finished&&(run.NeedsAttention||run.Stopped)?"Warning.Surface":"Accent.Surface"));
     }
     bool stopPending;
     void UpdateOperationLive()

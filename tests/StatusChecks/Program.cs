@@ -1,4 +1,4 @@
-﻿using IndieRun;
+using IndieRun;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
@@ -72,7 +72,7 @@ public static class Program
             var p=new Package {Id=Guid.NewGuid().ToString("N"),Source=source,DetectedRoot=source,SearchRoot=root,Folder="locked-game",Name="locked-game",Alias="실패한 게임",IsReal=true};
             using(var hold=File.Open(file,FileMode.Open,FileAccess.Read,FileShare.None))
             {try{Wait(new BackupEngine(Path.Combine(root,"backups")).CreateAsync(p,[]));throw new Exception("Failure expected");}catch(IOException){}}
-            Call(w,"RenderBackupJobs");var content=Get<StackPanel>(w,"JobsContent");var history=content.Children.OfType<Expander>().Single();Check(!history.IsExpanded,"History hides recovery actions");
+            Call(w,"RenderBackupJobs");Wait((Task)Call(w,"RefreshHistoryAsync")!);var content=Get<StackPanel>(w,"JobsContent");var history=content.Children.OfType<Expander>().Single(e=>e.Header?.ToString()?.StartsWith("완료 기록")==true);Check(!history.IsExpanded,"History hides recovery actions");
             var first=content.Children.OfType<Border>().First();Check(Find<TextBlock>(first).Any(t=>t.Text=="실패한 게임")&&Find<Button>(first).Any(b=>b.Content?.ToString()=="백업 재개"),"Recovery actions not first");
         });
         Set(w,"closingWithoutSave",true);w.Close();

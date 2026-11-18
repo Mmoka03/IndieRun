@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
@@ -27,7 +27,7 @@ public partial class MainWindow
     TextBlock playerCount=null!;
     readonly Dictionary<string,BitmapSource> artworkCache=new();
     readonly Dictionary<string,LaunchState> launchFailures=new();
-    string DataRoot=>Path.Combine(AppContext.BaseDirectory,"data");
+    string DataRoot=>Path.GetDirectoryName(workspaceStore.FilePath)!;
     EditTransaction Edits()=>new(DataRoot);
     static T Clone<T>(T value)=>JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value))!;
     static Grid WithHint(TextBox box,string hint)
@@ -67,12 +67,13 @@ public partial class MainWindow
             saveTimer.Stop();
             var plan=prepared??Clone(CaptureWorkspace());plan.Packages=next;plan.Tags=tags.Tags;
             foreach(var p in plan.Packages){p.GenreIds=tags.Tags.Where(t=>t.Kind=="genre"&&p.Genres.Contains(t.Name)).Select(t=>t.Id).ToList();p.CategoryIds=tags.Tags.Where(t=>t.Kind=="category"&&p.Categories.Contains(t.Name)).Select(t=>t.Id).ToList();}
-            var ids=edited.ToList();var chosen=selected.Id;Edits().Commit(new EditBundle {Plan=plan,Tags=tags,Play=play,EditedIds=ids,TagChanges=changes??[],ReconnectedIds=prepared!=null?ids:[]});
+            var ids=edited.ToList();foreach(var p in plan.Packages.Where(p=>ids.Contains(p.Id))){var setting=play.Games.Find(g=>g.Id==p.Id);if(setting?.Executable.Length>0){var file=Path.GetFullPath(Path.Combine(p.Source,setting.Executable));if(p.Includes(file)&&File.Exists(file))p.DetectedRoot=Path.GetDirectoryName(file)!;}}var chosen=selected.Id;Edits().Commit(new EditBundle {Plan=plan,Tags=tags,Play=play,EditedIds=ids,TagChanges=changes??[],ReconnectedIds=prepared!=null?ids:[]});
             packages=next;catalog=tags;playerDocument=play;lastSavedSignature=null;
             checkpoints=plan.Checkpoints;if(plan.SearchLocations!=null){searchLocations=plan.SearchLocations;UpdateSearchLocationLabel();}foreach(var id in ids)launchFailures.Remove(id);
             if(reconnectedScan!=null){snapshot=reconnectedScan;InspectLibrary(snapshot,packages);}
             selected=packages.Find(p=>p.Id==chosen)??packages.FirstOrDefault()??new();history.Clear();
-            if(snapshot!=null)foreach(var p in packages){WorkspaceReconciler.Check(p,checkpoints.Find(c=>c.PackageId==p.Id),snapshot);IdentityReconciler.Flag(p,identityInventory,libraryDocument);}
+            if(snapshot!=null)foreach(var p in packages.Where(p=>!snapshot.IsPartial||snapshot.SearchRoots.Any(root=>GameScanner.Within(p.Source,root)))){WorkspaceReconciler.Check(p,checkpoints.Find(c=>c.PackageId==p.Id),snapshot);IdentityReconciler.Flag(p,identityInventory,libraryDocument);}
+            if(snapshot!=null)LaunchPathRepair.Apply(packages,checkpoints,playerDocument,snapshot);
             FlushWorkspace();Say("저장했습니다");return true;
         }
         catch(Exception ex) when(LibraryFault(ex)){Say("편집 저장 확인 필요 · 기록을 보관했습니다");ErrorInfo("저장 확인","변경 내용을 저장하지 못했습니다.",ex.Message);return false;}
@@ -84,14 +85,14 @@ public partial class MainWindow
         var controls=new StackPanel();DockPanel.SetDock(controls,Dock.Top);PlayerContent.Children.Add(controls);
         var top=new DockPanel {Margin=new Thickness(0,0,0,18)};
         var options=new WrapPanel {HorizontalAlignment=HorizontalAlignment.Right};
-        options.Children.Add(Btn("탐색 위치",async()=>await ManageSearchLocationsAsync()));
+        options.Children.Add(Btn("게임 가져오기",async()=>await BeginGameImportAsync()));
         options.Children.Add(Btn(playerView.Layout=="cards"?"목록형 보기":"카드형 보기",()=>{playerView.Layout=playerView.Layout=="cards"?"list":"cards";SaveView();RenderPlayer();}));
         options.Children.Add(Btn(multiSelect?"선택 마침":"다중 선택",()=>{multiSelect=!multiSelect;playerSelection.Clear();RenderPlayer();}));DockPanel.SetDock(options,Dock.Right);top.Children.Add(options);controls.Children.Add(top);
         var searchRow=new DockPanel {Margin=new Thickness(0,0,0,14)};
-        var original=new CheckBox {Content="원본 이름 포함",IsChecked=playerView.IncludeOriginal,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(14,0,0,0)};
+        var original=new CheckBox {Content="폴더명 포함",IsChecked=playerView.IncludeOriginal,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(14,0,0,0)};
         DockPanel.SetDock(original,Dock.Right);searchRow.Children.Add(original);
         var sorting=new ComboBox {Width=140,Margin=new Thickness(12,0,0,0),VerticalContentAlignment=VerticalAlignment.Center,ItemsSource=new[]{"별칭순","최근 실행순","추가순"},SelectedIndex=playerView.Sort=="recent"?1:playerView.Sort=="added"?2:0};AutomationProperties.SetName(sorting,"게임 정렬 순서");DockPanel.SetDock(sorting,Dock.Right);searchRow.Children.Add(sorting);
-        playerSearch=new TextBox {Text=playerView.Query,ToolTip="별칭 검색 · 별칭이 없으면 원본 이름 검색"};AutomationProperties.SetName(playerSearch,"게임 별칭 검색");searchRow.Children.Add(WithHint(playerSearch,"별칭으로 검색"));controls.Children.Add(searchRow);
+        playerSearch=new TextBox {Text=playerView.Query,ToolTip="별칭 검색 · 별칭이 없으면 폴더명 검색"};AutomationProperties.SetName(playerSearch,"게임 별칭 검색");searchRow.Children.Add(WithHint(playerSearch,"별칭으로 검색"));controls.Children.Add(searchRow);
         original.Click+=(_,_)=>{playerView.IncludeOriginal=original.IsChecked==true;ResetPlayerSelection();};
         sorting.SelectionChanged+=(_,_)=>{playerView.Sort=sorting.SelectedIndex==1?"recent":sorting.SelectedIndex==2?"added":"alias";ResetPlayerSelection();};
         playerSearch.TextChanged+=(_,_)=>{playerView.Query=playerSearch.Text;ResetPlayerSelection();};
@@ -111,11 +112,7 @@ public partial class MainWindow
         selectionBar=new StackPanel {Margin=new Thickness(0,4,0,10)};controls.Children.Add(selectionBar);
         playerCount=Text("",12,"#8090A8");controls.Children.Add(playerCount);
         if(playerError.Length>0)controls.Children.Add(Text("실행 설정 확인 필요 · "+playerError,12,"#AA7848"));
-        if(File.Exists(Edits().Pending)||(ScopeChanges().HasPending||RenamePending))controls.Children.Add(Btn("중단된 편집 저장 복구",async()=>
-        {
-            try{if(BatchRenames().HasPending){ShowRenameProgress();return;}Edits().Recover();workspaceBlocked=false;LoadTags();var saved=workspaceStore.Load().Document;if(saved!=null)ApplyWorkspace(saved);await RefreshWorkspaceAsync(source,false,false);LoadPlayer();RenderPlayer();}
-            catch(Exception ex) when(LibraryFault(ex)){ErrorInfo("편집 복구","편집 내용을 복구하지 못했습니다.",ex.Message);}
-        }));
+        if(File.Exists(Edits().Pending)||(ScopeChanges().HasPending||RenamePending))controls.Children.Add(Btn("중단된 편집 저장 복구",async()=>await RecoverPendingEditAsync()));
         playerCards=new WrapPanel {Margin=new Thickness(0,14,0,0)};
         playerScroll=new ScrollViewer {Content=playerCards,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled};PlayerContent.Children.Add(playerScroll);RenderPlayerItems();
     }
@@ -159,7 +156,7 @@ public partial class MainWindow
             actions.Children.Add(Btn("결과 전체 선택",()=>{foreach(var p in visible)playerSelection.Add(p.Id);RenderPlayerItems();}));
             var clear=Btn("선택 해제",()=>{playerSelection.Clear();RenderPlayerItems();});clear.IsEnabled=playerSelection.Count>0;actions.Children.Add(clear);
             var hide=Btn(playerView.Group=="hidden"?"숨김 해제":"숨기기",()=>SetGamesHidden(playerSelection,playerView.Group!="hidden"));hide.IsEnabled=playerSelection.Count>0;actions.Children.Add(hide);
-            var edit=Btn("태그 편집",()=>{if(EditGames(packages.Where(p=>playerSelection.Contains(p.Id)).ToList(),batchTags:true))RenderPlayer();},true);edit.IsEnabled=playerSelection.Count>0;edit.Margin=new Thickness(0);actions.Children.Add(edit);
+            var edit=Btn("태그 편집",()=>{if(EditGames(packages.Where(p=>playerSelection.Contains(p.Id)).ToList(),batchTags:true))RenderPlayer();},true);edit.IsEnabled=playerSelection.Count>0;actions.Children.Add(edit);
             var manage=Btn("관리",()=>{var popup=new ContextMenu();var rename=new MenuItem{Header="폴더명 변경"};rename.Click+=(_,_)=>RenameGames(packages.Where(p=>playerSelection.Contains(p.Id)));popup.Items.Add(rename);popup.IsOpen=true;});manage.IsEnabled=playerSelection.Count>0&&!RenamePending&&!workspaceBlocked;actions.Children.Add(manage);
             bar.Children.Add(actions);selectionBar.Children.Add(WorkCard(bar,"Accent.Surface"));
         }
@@ -167,8 +164,9 @@ public partial class MainWindow
         foreach(var p in PageItems(visible,"player",playerView.Query+"|"+playerView.Sort+"|"+playerView.Group+"|"+string.Join(",",playerView.TagIds),selectionBar,RenderPlayerItems))playerCards.Children.Add(GameCard(p,playerView.Layout=="list"));
         if(visible.Count==0)
         {
-            var empty=new StackPanel();empty.Children.Add(WorkText(searchLocations.Count==0&&packages.Count==0?"탐색 위치를 추가해 게임을 찾아보세요.":playerView.Group=="hidden"?"숨긴 게임이 없습니다.":"조건에 맞는 게임이 없습니다.",14,"Text.Muted"));
-            if(searchLocations.Count==0&&packages.Count==0)empty.Children.Add(Btn("탐색 위치",async()=>await ManageSearchLocationsAsync()));
+            var hasRegisteredGames=packages.Any(p=>!p.IsRelatedContent&&(GameRegistration.IsAdded(p)||libraryDocument.Games.Any(g=>g.Id==p.Id)))||libraryDocument.Games.Any(g=>!g.IsContent);
+            var empty=new StackPanel();empty.Children.Add(WorkText(!hasRegisteredGames?"아직 실행목록에 등록한 게임이 없습니다.":playerView.Group=="hidden"?"숨긴 게임이 없습니다.":"조건에 맞는 게임이 없습니다.",14,"Text.Muted"));
+            if(!hasRegisteredGames){var browse=Btn("게임 가져오기",async()=>await BeginGameImportAsync());browse.Margin=new Thickness(0,14,0,0);browse.HorizontalAlignment=HorizontalAlignment.Left;empty.Children.Add(browse);}
             playerCards.Children.Add(new Border {Padding=new Thickness(24),Child=empty});
         }
         playerScroll.ScrollToVerticalOffset(offset);
@@ -206,8 +204,8 @@ public partial class MainWindow
             menu.Click+=(_,_)=>
             {
                 var popup=new ContextMenu();void Item(string label,Action action){var item=new MenuItem {Header=label};item.Click+=(_,_)=>action();popup.Items.Add(item);}
-                if(HasResources(p))Item("관련 자료",()=>ShowResources(p));Item("상세 보기",()=>ShowGameDetails(p));Item("게임 정보 편집",()=>{if(EditGames([p]))RenderPlayerItems();});Item("게임 폴더 열기",()=>OpenSourceFolder(p.Source));
-                var management=new MenuItem{Header="관리"};void Manage(string label,Action action){var option=new MenuItem{Header=label};option.Click+=(_,_)=>action();management.Items.Add(option);}Manage("폴더명 변경",()=>RenameFolder(p));Manage("폴더 다시 연결",async()=>await ReconnectGameAsync(p));Manage("목록에서 제거",()=>RemoveGame(p));
+                if(HasResources(p))Item("관련 자료",()=>ShowResources(p));Item("상세 보기",()=>ShowGameDetails(p));Item("게임 정보 편집",()=>{if(EditGames([p]))RenderPlayerItems();});Item("게임 폴더 열기",()=>OpenSourceFolder(p.Source));Item("보관함으로 옮기기",async()=>await OpenTransferAsync([p]));
+                var management=new MenuItem{Header="관리"};void Manage(string label,Action action){var option=new MenuItem{Header=label};option.Click+=(_,_)=>action();management.Items.Add(option);}Manage("백업 만들기",async()=>{if(Confirm("백업 만들기","선택한 게임을 백업합니다. 게임 폴더는 옮기지 않습니다.","백업 만들기"))await StartBackupBatchAsync([p]);});Manage("폴더명 변경",()=>RenameFolder(p));Manage("게임 폴더 다시 찾기",async()=>await ReconnectGameAsync(p));Manage("목록에서 제거",()=>RemoveGame(p));
                 Item("실행 설정",()=>{if(EditGames([p],launchOnly:true))RenderPlayerItems();});
                 if(state.NeedsAttention)Item("문제 해결",()=>ShowLaunchProblem(p,state));
                 Item(settings.Hidden?"숨김 해제":"숨기기",()=>SetGamesHidden([p.Id],!settings.Hidden));
@@ -236,13 +234,14 @@ public partial class MainWindow
         }
         catch(Exception ex) when(LibraryFault(ex)||ex is NotSupportedException or FileFormatException){return null;}
     }
-    void ShowGameDetails(Package p)
+    void ShowGameDetails(Package p)=>BuildGameDetails(p).ShowDialog();
+    Window BuildGameDetails(Package p)
     {
-        var win=Modal("게임 정보",740,520);var stack=new StackPanel {Margin=new Thickness(26)};
-        stack.Children.Add(Text(PlayerRules.Title(p),24));stack.Children.Add(Text(p.Folder,13,"#8393AA"));stack.Children.Add(Text(p.Source,12));
-        stack.Children.Add(Text("장르 · "+string.Join(" · ",p.Genres),13));stack.Children.Add(Text("카테고리 · "+string.Join(" · ",p.Categories),13));
+        var win=Modal("게임 정보",740,520);var dock=new DockPanel {Margin=new Thickness(26)};var stack=new StackPanel();
+        stack.Children.Add(Text(PlayerRules.Title(p),24));stack.Children.Add(Text(p.Folder,13,"#8393AA"));stack.Children.Add(CompactPath(p.Source));
+        stack.Children.Add(new TextBlock {Text="장르 · "+(p.Genres.Count==0?"미분류":string.Join(" · ",p.Genres)),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,18,0,8)});stack.Children.Add(Text("카테고리 · "+(p.Categories.Count==0?"미분류":string.Join(" · ",p.Categories)),13));
         var actions=new WrapPanel {Margin=new Thickness(0,24,0,0)};actions.Children.Add(Btn("내용 · 관련 문서 보기",()=>{var previous=selected;selected=p;try{ShowRealPreview();}finally{selected=previous;}}));
-        actions.Children.Add(Btn("편집",()=>{win.Close();if(EditGames([p]))RenderPlayerItems();}));actions.Children.Add(Btn("닫기",()=>win.Close()));stack.Children.Add(actions);win.Content=stack;win.ShowDialog();
+        actions.Children.Add(Btn("편집",()=>{win.Close();if(EditGames([p]))RenderPlayerItems();}));var close=Btn("닫기",()=>win.Close());close.IsCancel=true;actions.Children.Add(close);DockPanel.SetDock(actions,Dock.Bottom);dock.Children.Add(actions);dock.Children.Add(new ScrollViewer {Content=stack,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled});win.Content=dock;return win;
     }
     void LaunchGame(Package p)
     {

@@ -19,11 +19,11 @@ public sealed class ScopeChange(string dataRoot)
     public bool HasPending=>File.Exists(Pending);
     public Action<string>? Checkpoint {get;set;}
     static T Copy<T>(T item)=>JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(item))!;
-    public static string? Problem(Package p,string path,IEnumerable<Package> games)
+    public static string? Problem(Package p,string path,IEnumerable<Package> games,ScanSnapshot? scan=null,string? oldRoot=null)
     {
         path=Path.GetFullPath(path);
-        if(!GameScanner.Within(path,p.SearchRoot)||path.Equals(p.SearchRoot,StringComparison.OrdinalIgnoreCase)||!GameScanner.Within(p.DetectedRoot,path))return "실행 폴더를 포함하는 범위를 선택하세요. 탐색 위치 전체는 포함하지 않습니다.";
-        if(games.Any(q=>q.Id!=p.Id&&(GameScanner.Within(path,q.Source)||GameScanner.Within(q.Source,path))))return "다른 게임이 함께 포함됩니다. 범위는 변경하지 않았습니다.";
+        if(!GameScanner.Within(path,p.SearchRoot)||!FolderPolicy.RootAllowed(path)||!GameScanner.Within(p.DetectedRoot,path))return "실행 폴더를 포함하는 범위를 선택하세요.";
+        if(games.Any(q=>FolderPolicy.Conflict(p,q,path,scan)&&!RegisteredTree.ExistingChild(p,q,oldRoot??p.Source,path)))return "기존 항목의 범위와 겹칩니다. 겹치는 항목을 확인하세요.";
         return null;
     }
     static string Rebase(string oldRoot,string newRoot,string relative,bool folder=false)
@@ -38,29 +38,34 @@ public sealed class ScopeChange(string dataRoot)
         if(HasPending||File.Exists(new EditTransaction(dataRoot).Pending))throw new IOException("이전 저장을 먼저 복구하세요.");
         var prior=plan.Packages.Single(p=>p.Id==id);path=Path.GetFullPath(path);BackupPaths.NoLinks(path);BackupPaths.NoLinks(prior.Source);
         var required=play.Games.Find(g=>g.Id==id);var anchorModel=Copy(prior);if(required?.Executable.Length>0)anchorModel.DetectedRoot=Path.GetDirectoryName(BackupPaths.Child(prior.Source,required.Executable))!;
-        var error=Problem(anchorModel,path,plan.Packages);if(error!=null)throw new IOException(error);
+        
         if(prior.ReviewState.Length>0)throw new IOException("현재 폴더 상태를 먼저 확인하세요.");
         if(path.Equals(prior.Source,StringComparison.OrdinalIgnoreCase))throw new IOException("현재 범위와 같습니다.");
         var anchor=GameScanner.Within(path,prior.Source)?prior.Source:path;
         if(GameScanner.Within(dataRoot,anchor))throw new IOException("프로그램 정보를 포함하는 폴더는 범위로 지정할 수 없습니다.");
         var scan=GameScanner.Scan(anchor);if(scan.UnreadablePaths.Count>0||scan.Issues.Count>0)throw new IOException("범위 안의 모든 폴더를 확인할 수 없습니다. 위치와 접근 권한을 확인하세요.");
+        var error=Problem(anchorModel,path,plan.Packages,scan);if(error!=null)throw new IOException(error);
+        if(plan.Packages.Any(q=>FolderPolicy.ScopeOverlap(prior,q,path)&&!RegisteredTree.ExistingChild(prior,q,prior.Source,path)&&!FolderPolicy.UnownedAncestor(q,path)&&!FolderPolicy.VerifiedMissing(q.Source,scan)&&play.Games.Any(g=>g.Id==q.Id&&LaunchPathRepair.HasSettings(g))))throw new IOException("다른 항목의 실행 설정이 있습니다. 기존 연결을 먼저 확인하세요.");
         var marker=LibraryStore.ReadIdentity(prior.Source);
         if(marker!=null&&marker.GameId!=id||marker==null&&library.Games.Any(g=>g.Id==id))throw new IOException("기존 게임 식별 정보를 먼저 확인하세요.");
-        var oldMarker=Path.Combine(prior.Source,LibraryStore.MarkerName);
-        if(scan.Files.Any(f=>Path.GetFileName(f.Path)==LibraryStore.MarkerName&&!f.Path.Equals(oldMarker,StringComparison.OrdinalIgnoreCase)))throw new IOException("새 범위에 다른 식별 파일이 있습니다. 보관함에서 먼저 확인하세요.");
-        var next=Copy(plan);var p=next.Packages.Single(p=>p.Id==id);var nextPlay=Copy(play);var game=nextPlay.Games.Find(g=>g.Id==id);if(game==null){game=new(){Id=id};nextPlay.Games.Add(game);}
+        var oldMarker=Path.Combine(prior.Source,LibraryStore.MarkerName);var newMarker=Path.Combine(path,LibraryStore.MarkerName);
+        var scope=Copy(prior);FolderPolicy.RebaseScopeExclusions(scope,path);scope.Source=path;
+        if(scan.Files.Any(f=>Path.GetFileName(f.Path)==LibraryStore.MarkerName&&!f.Path.Equals(oldMarker,StringComparison.OrdinalIgnoreCase)&&scope.Includes(f.Path)&&!plan.Packages.Any(q=>q.Source.Equals(Path.GetDirectoryName(f.Path),StringComparison.OrdinalIgnoreCase)&&RegisteredTree.ExistingChild(prior,q,prior.Source,path))))throw new IOException("새 범위에 다른 식별 파일이 있습니다. 보관함에서 먼저 확인하세요.");
+        var next=Copy(plan);var removed=next.Packages.Where(q=>FolderPolicy.ScopeOverlap(prior,q,path)&&!RegisteredTree.ExistingChild(prior,q,prior.Source,path)&&!FolderPolicy.UnownedAncestor(q,path)&&FolderPolicy.Redundant(q,prior.Source,scan)).Select(q=>q.Id).ToHashSet();next.Packages.RemoveAll(q=>removed.Contains(q.Id));next.Checkpoints.RemoveAll(c=>removed.Contains(c.PackageId));var p=next.Packages.Single(p=>p.Id==id);var nextPlay=Copy(play);var game=nextPlay.Games.Find(g=>g.Id==id);if(game==null){game=new(){Id=id};nextPlay.Games.Add(game);}
         game.Executable=Rebase(prior.Source,path,game.Executable);game.WorkingDirectory=Rebase(prior.Source,path,game.WorkingDirectory,true);
-        p.DetectedRoot=anchorModel.DetectedRoot;p.Source=path;p.Folder=Path.GetFileName(path);if(p.Name==prior.Folder)p.Name=p.Folder;p.ScopeHistory.Clear();p.LocalRegistration=marker==null;
+        p.DetectedRoot=anchorModel.DetectedRoot;FolderPolicy.RebaseScopeExclusions(p,path);p.Source=path;p.Folder=Path.GetFileName(path);if(p.Name==prior.Folder)p.Name=p.Folder;p.ScopeHistory.Clear();p.LocalRegistration=marker==null;
         var size=scan.Files.Where(f=>GameScanner.Within(f.Path,path)).Sum(f=>f.Length);p.Gb=size/(1024d*1024*1024);p.Size=size>=1024L*1024*1024?$"{size/(1024d*1024*1024):0.##} GB":size>=1024*1024?$"{size/(1024d*1024):0.##} MB":size>=1024?$"{size/1024d:0.#} KB":$"{size} B";
         next.Checkpoints.RemoveAll(c=>c.PackageId==id);next.Checkpoints.Add(WorkspaceReconciler.Capture(p,scan));
-        var expected=WorkspaceReconciler.Capture(new Package{Id=id,Source=anchor},scan);expected.Files.RemoveAll(f=>Path.GetFileName(f.RelativePath)==LibraryStore.MarkerName);
+        var expected=WorkspaceReconciler.Capture(new Package{Id=id,Source=anchor},scan);expected.Files.RemoveAll(f=>new[]{oldMarker,newMarker}.Contains(Path.Combine(anchor,f.RelativePath),StringComparer.OrdinalIgnoreCase));
         return new(){Id=id,OldRoot=prior.Source,NewRoot=path,Anchor=anchor,Expected=expected,MarkerData=marker==null?"":Convert.ToBase64String(File.ReadAllBytes(oldMarker)),Bundle=new(){Plan=next,Tags=Copy(tags),Play=nextPlay,EditedIds=[id],ReconnectedIds=[id]}};
     }
     static void Validate(ScopeChangeRecord r)
     {
         if(r.Version!=1||!BackupPaths.Id(r.Id)||!Path.IsPathFullyQualified(r.OldRoot)||!Path.IsPathFullyQualified(r.NewRoot)||!Path.IsPathFullyQualified(r.Anchor)||!GameScanner.Within(r.OldRoot,r.Anchor)||!GameScanner.Within(r.NewRoot,r.Anchor)||r.OldRoot==r.NewRoot||r.Expected==null||r.Expected.Files==null||r.Expected.Directories==null||r.Bundle==null||r.Bundle.Plan==null||r.Bundle.Play==null||r.Bundle.Tags==null||r.MarkerData==null||r.MarkerData.Length>6000)throw new InvalidDataException("범위 변경 기록을 확인하세요.");
         WorkspaceStore.Validate(r.Bundle.Plan);PlayerStore.Validate(r.Bundle.Play);
-        var game=r.Bundle.Plan.Packages.Single(p=>p.Id==r.Id);if(!game.Source.Equals(r.NewRoot,StringComparison.OrdinalIgnoreCase)||Problem(game,r.NewRoot,r.Bundle.Plan.Packages)!=null||!GameScanner.Within(game.DetectedRoot,r.OldRoot)||!GameScanner.Within(r.OldRoot,game.SearchRoot)||r.Expected.Source!=r.Anchor||r.Expected.Files.Any(f=>!BackupPaths.Relative(f.RelativePath))||r.Expected.Directories.Any(d=>!BackupPaths.Relative(d)))throw new InvalidDataException("범위 변경 경로를 확인하세요.");
+        if(r.Expected.Files.Any(f=>!BackupPaths.Relative(f.RelativePath))||r.Expected.Directories.Any(d=>!BackupPaths.Relative(d)))throw new InvalidDataException("범위 변경 기록을 확인하세요.");
+        var proof=new ScanSnapshot{Root=r.Anchor};proof.Directories.Add(r.Anchor);proof.Directories.AddRange(r.Expected.Directories.Select(d=>BackupPaths.Child(r.Anchor,d)));
+        var game=r.Bundle.Plan.Packages.Single(p=>p.Id==r.Id);if(!game.Source.Equals(r.NewRoot,StringComparison.OrdinalIgnoreCase)||Problem(game,r.NewRoot,r.Bundle.Plan.Packages,proof,r.OldRoot)!=null||!GameScanner.Within(game.DetectedRoot,r.OldRoot)||!GameScanner.Within(r.OldRoot,game.SearchRoot)||r.Expected.Source!=r.Anchor||r.Expected.Files.Any(f=>!BackupPaths.Relative(f.RelativePath))||r.Expected.Directories.Any(d=>!BackupPaths.Relative(d)))throw new InvalidDataException("범위 변경 경로를 확인하세요.");
         if(r.MarkerData.Length>0){try{var marker=JsonSerializer.Deserialize<GameIdentity>(Convert.FromBase64String(r.MarkerData));if(marker?.GameId!=r.Id||marker.Format!="IndieRun.GameIdentity"||marker.Version!=1)throw new InvalidDataException("기존 식별 정보가 올바르지 않습니다.");}catch(FormatException ex){throw new InvalidDataException("기존 식별 정보가 올바르지 않습니다.",ex);}}
     }
     public void Commit(ScopeChangeRecord record)
@@ -73,10 +78,15 @@ public sealed class ScopeChange(string dataRoot)
     {
         BackupPaths.NoLinks(r.Anchor);var scan=GameScanner.Scan(r.Anchor);
         if(scan.UnreadablePaths.Count>0||scan.Issues.Count>0)throw new IOException("범위 변경 중 접근할 수 없는 항목이 있습니다.");
-        var current=WorkspaceReconciler.Capture(new Package{Id=r.Id,Source=r.Anchor},scan);current.Files.RemoveAll(f=>Path.GetFileName(f.RelativePath)==LibraryStore.MarkerName);
+        var current=WorkspaceReconciler.Capture(new Package{Id=r.Id,Source=r.Anchor},scan);current.Files.RemoveAll(f=>new[]{Path.Combine(r.OldRoot,LibraryStore.MarkerName),Path.Combine(r.NewRoot,LibraryStore.MarkerName)}.Contains(Path.Combine(r.Anchor,f.RelativePath),StringComparer.OrdinalIgnoreCase));
         if(!current.Files.SequenceEqual(r.Expected.Files)||!current.Directories.SequenceEqual(r.Expected.Directories))throw new IOException("범위 변경 중 폴더 내용이 달라졌습니다. 기록을 유지했습니다. 원래 상태를 확인한 뒤 복구하세요.");
         var allowed=new[]{Path.Combine(r.OldRoot,LibraryStore.MarkerName),Path.Combine(r.NewRoot,LibraryStore.MarkerName)};
-        foreach(var f in scan.Files.Where(f=>Path.GetFileName(f.Path)==LibraryStore.MarkerName))if(!allowed.Contains(f.Path,StringComparer.OrdinalIgnoreCase)||LibraryStore.ReadIdentity(Path.GetDirectoryName(f.Path)!)?.GameId!=r.Id)throw new IOException("식별 정보가 달라졌습니다. 자동으로 덮어쓰지 않습니다.");
+        var parent=r.Bundle.Plan.Packages.Single(p=>p.Id==r.Id);
+        foreach(var f in scan.Files.Where(f=>Path.GetFileName(f.Path)==LibraryStore.MarkerName&&(allowed.Contains(f.Path,StringComparer.OrdinalIgnoreCase)||parent.Includes(f.Path))))
+        {
+            if(!allowed.Contains(f.Path,StringComparer.OrdinalIgnoreCase)&&r.Bundle.Plan.Packages.Any(q=>q.Source.Equals(Path.GetDirectoryName(f.Path),StringComparison.OrdinalIgnoreCase)&&RegisteredTree.ExistingChild(parent,q,r.OldRoot,r.NewRoot)))continue;
+            if(!allowed.Contains(f.Path,StringComparer.OrdinalIgnoreCase)||LibraryStore.ReadIdentity(Path.GetDirectoryName(f.Path)!)?.GameId!=r.Id)throw new IOException("식별 정보가 달라졌습니다. 자동으로 덮어쓰지 않습니다.");
+        }
         return scan;
     }
     void Apply(ScopeChangeRecord r)

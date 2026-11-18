@@ -14,7 +14,7 @@ public partial class MainWindow
         if(picker.ShowDialog(this)!=true)return;
         if(Path.GetFullPath(picker.FolderName).TrimEnd('\\').Equals(Path.GetFullPath(destination).TrimEnd('\\'),StringComparison.OrdinalIgnoreCase))return;
         var message="등록 정보와 실행 설정을 유지합니다. 게임 파일은 현재 위치에 남습니다.";
-        if(picker.FolderName.Any(c=>c>127))message+="\n경로에 한글·일본어 등이 있어 일부 게임에서 실행 문제가 생길 수 있습니다.";
+        if(ContainerPathWarning(picker.FolderName) is {Length:>0} pathWarning)message+="\n"+pathWarning;
         if(!Confirm("보관함 위치 변경",message,"위치 변경",picker.FolderName))return;
         try
         {

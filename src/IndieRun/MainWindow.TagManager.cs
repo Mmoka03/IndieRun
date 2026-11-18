@@ -10,11 +10,8 @@ public partial class MainWindow
     string managerKind="genre",managerQuery="",tagReturnPage="play";
     List<(string Id,string Title)> TagUsers(TagDefinition tag)
     {
-        var result=new Dictionary<string,string>();
-        foreach(var p in packages)if((tag.Kind=="genre"?p.Genres:p.Categories).Contains(tag.Name)||(tag.Kind=="genre"?p.GenreIds:p.CategoryIds).Contains(tag.Id))result[p.Id]=PlayerRules.Title(p);
         var doc=HasLibraryFile?Library().Load():libraryDocument;
-        foreach(var game in doc.Games)if((tag.Kind=="genre"?game.Genres:game.Categories).Contains(tag.Name)||(tag.Kind=="genre"?game.GenreIds:game.CategoryIds).Contains(tag.Id))result.TryAdd(game.Id,game.Alias.Length>0?game.Alias:game.Folder);
-        return result.Select(p=>(p.Key,p.Value)).OrderBy(p=>p.Value).ToList();
+        return PlayerRules.TagUsage(packages,doc,[tag])[tag.Id];
     }
     void RenderModernTags()
     {
@@ -25,6 +22,8 @@ public partial class MainWindow
         foreach(var kind in new[]{"genre","category"}){var b=Btn($"{KindLabel(kind)}  {catalog.Tags.Count(t=>t.Kind==kind)}",()=>{managerKind=kind;RenderModernTags();},managerKind==kind);DockPanel.SetDock(b,Dock.Left);toolbar.Children.Add(b);}
         var query=new TextBox {Text=managerQuery,ToolTip="태그 이름 검색",MinWidth=180};AutomationProperties.SetName(query,"관리 태그 검색");toolbar.Children.Add(WithHint(query,"태그 이름 검색"));TagsContent.Children.Add(toolbar);
         var rows=new StackPanel();TagsContent.Children.Add(rows);
+        Dictionary<string,List<(string Id,string Title)>> usage=[];string usageError="";
+        if(tagLoadError.Length==0)try{usage=PlayerRules.TagUsage(packages,HasLibraryFile?Library().Load():libraryDocument,catalog.Tags);}catch(Exception ex)when(LibraryFault(ex)){usageError=ex.Message;}
         void RenderRows()
         {
             rows.Children.Clear();
@@ -33,8 +32,8 @@ public partial class MainWindow
             {
                 var grid=new Grid {Margin=new Thickness(0,0,0,8)};grid.ColumnDefinitions.Add(new ColumnDefinition());grid.ColumnDefinitions.Add(new ColumnDefinition {Width=new GridLength(170)});grid.ColumnDefinitions.Add(new ColumnDefinition {Width=new GridLength(48)});
                 grid.Children.Add(new Border {Background=B("#EAF0FB"),CornerRadius=new CornerRadius(5),Padding=new Thickness(12,7,12,7),HorizontalAlignment=HorizontalAlignment.Left,VerticalAlignment=VerticalAlignment.Center,Child=new TextBlock {Text=tag.Name,FontWeight=FontWeights.SemiBold,TextTrimming=TextTrimming.CharacterEllipsis,MaxWidth=380,ToolTip=tag.Name}});
-                List<(string Id,string Title)> users;
-                try{users=TagUsers(tag);}catch(Exception ex) when(LibraryFault(ex)){rows.Children.Add(Text("사용 현황 확인 실패 · "+ex.Message,12,"#A37B50"));continue;}
+                if(usageError.Length>0){rows.Children.Add(WorkText("태그 사용 현황을 읽지 못했습니다.",13,"Warning.Text"));var retry=Btn("다시 확인",RenderModernTags);retry.HorizontalAlignment=HorizontalAlignment.Left;retry.Margin=new Thickness(0,10,0,10);rows.Children.Add(retry);rows.Children.Add(WorkDetails(usageError));break;}
+                var users=usage.GetValueOrDefault(tag.Id)??[];
                 var count=Btn($"게임 {users.Count}개 ↗",()=>
                 {var win=Modal(tag.Name+" · 사용 게임",650,500);var list=new StackPanel {Margin=new Thickness(24)};list.Children.Add(Text($"게임 {users.Count}개",20));foreach(var user in users)list.Children.Add(new TextBlock {Text=user.Title,Margin=new Thickness(0,12,0,0)});win.Content=new ScrollViewer {Content=list};win.ShowDialog();});count.BorderThickness=new Thickness(0);count.Background=System.Windows.Media.Brushes.Transparent;Grid.SetColumn(count,1);grid.Children.Add(count);
                 var more=Btn("⋯",()=>{});Grid.SetColumn(more,2);grid.Children.Add(more);

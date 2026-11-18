@@ -33,6 +33,22 @@ public sealed class PlayerView
 public static class PlayerRules
 {
     public static string Title(Package p)=>string.IsNullOrWhiteSpace(p.Alias)?p.Folder:p.Alias;
+    public static Dictionary<string,List<(string Id,string Title)>> TagUsage(IEnumerable<Package> packages,LibraryDocument library,IEnumerable<TagDefinition> definitions)
+    {
+        var tags=definitions.ToList();var result=tags.ToDictionary(t=>t.Id,_=>new Dictionary<string,string>());
+        var names=tags.ToDictionary(t=>(t.Kind,t.Name),t=>t.Id);var kinds=tags.ToDictionary(t=>t.Id,t=>t.Kind);
+        void Add(string id,string title,IEnumerable<string> genres,IEnumerable<string> categories,IEnumerable<string> genreIds,IEnumerable<string> categoryIds)
+        {
+            foreach(var pair in new[]{("genre",genres,genreIds),("category",categories,categoryIds)})
+            {
+                foreach(var name in pair.Item2)if(names.TryGetValue((pair.Item1,name),out var tagId))result[tagId].TryAdd(id,title);
+                foreach(var tagId in pair.Item3)if(kinds.GetValueOrDefault(tagId)==pair.Item1)result[tagId].TryAdd(id,title);
+            }
+        }
+        foreach(var p in packages)Add(p.Id,Title(p),p.Genres,p.Categories,p.GenreIds,p.CategoryIds);
+        foreach(var g in library.Games)Add(g.Id,string.IsNullOrWhiteSpace(g.Alias)?g.Folder:g.Alias,g.Genres,g.Categories,g.GenreIds,g.CategoryIds);
+        return result.ToDictionary(pair=>pair.Key,pair=>pair.Value.Select(g=>(Id:g.Key,Title:g.Value)).OrderBy(g=>g.Title,StringComparer.CurrentCultureIgnoreCase).ToList());
+    }
     public static bool Matches(Package p,GamePlay settings,PlayerView view,IEnumerable<TagDefinition> tags)
     {
         if(p.Excluded||(view.Group=="hidden"?!settings.Hidden:settings.Hidden))return false;
@@ -77,6 +93,14 @@ public sealed class PlayerStore(string root)
     }
     public PlayerDocument Load()=>File.Exists(FilePath)||File.Exists(FilePath+".bak")?BackupJson.Load<PlayerDocument>(FilePath,Validate):new();
     public void Save(PlayerDocument doc)=>BackupJson.Save(FilePath,doc,Validate);
+    public static void ValidateLaunchEdit(Package package,GamePlay original,GamePlay draft,bool requireExecutable=false)
+    {
+        Validate(new PlayerDocument {Games=[draft]});
+        var changed=original.Executable!=draft.Executable||original.WorkingDirectory!=draft.WorkingDirectory||original.Arguments!=draft.Arguments;
+        if(!requireExecutable&&!changed)return;
+        if(draft.Executable.Length==0)throw new GameLaunchException(LaunchProblem.Setup,"실행 파일을 먼저 선택하세요.");
+        StartInfo(package,draft);
+    }
     public static ProcessStartInfo StartInfo(Package p,GamePlay game)
     {
         Validate(new PlayerDocument {Games=[game]});

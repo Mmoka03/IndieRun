@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -71,7 +71,7 @@ public partial class MainWindow : Window
     }
     void RenderCandidates()=>RenderOrganizeCandidates();
     void RenderPlan()=>RenderOrganizeFooter();
-    void Search_Changed(object sender, TextChangedEventArgs e) { if (selected != null) RenderCandidates(); if(!rendering)QueueWorkspaceSave(); }
+    void Search_Changed(object sender, TextChangedEventArgs e) { recentMoveIds.Clear(); if (selected != null) RenderCandidates(); if(!rendering)QueueWorkspaceSave(); }
     void Alias_Changed(object sender, RoutedEventArgs e)
     {
         aliasEditing=false;
@@ -117,7 +117,7 @@ public partial class MainWindow : Window
     async void Reset_Click(object sender, RoutedEventArgs e) { if(scanning){scanCancellation?.Cancel();return;} if (running) return; await ScanAsync(source,true); }
     void Destination_Click(object sender, RoutedEventArgs e)=>ChangeLibraryLocation();
     async void Source_Click(object sender,RoutedEventArgs e)=>await ManageSearchLocationsAsync();
-    void Organize_Click(object sender, RoutedEventArgs e) { SetPage("organize"); Render(); Say("게임을 추가해도 폴더는 이동하지 않습니다."); }
+    void Organize_Click(object sender, RoutedEventArgs e) { SetPage("organize"); Render(); Say("게임을 선택해 등록하거나 옮기세요."); }
     void Jobs_Click(object sender, RoutedEventArgs e)
     {
         SetPage("jobs"); RenderJobs();
@@ -165,7 +165,7 @@ public partial class MainWindow : Window
         if(destination.Any(c=>c>127)||list.Any(p=>p.Name.Any(c=>c>127))) top.Children.Add(Text("주의: 최종 경로에 비ASCII 문자가 포함되어 있습니다.",12,"#A46928"));
         DockPanel.SetDock(top,Dock.Top);dock.Children.Add(top);
         var bottom=new StackPanel {Margin=new Thickness(0,16,0,0)};DockPanel.SetDock(bottom,Dock.Bottom);
-        var progress=new TextBlock {Text="실제 백업·이동 없이 화면 흐름만 체험합니다.",Foreground=B("#7D8BA1"),Margin=new Thickness(0,0,0,12)};bottom.Children.Add(progress);
+        var progress=new TextBlock {Text="실제 폴더 이동·백업 없이 화면 흐름만 체험합니다.",Foreground=B("#7D8BA1"),Margin=new Thickness(0,0,0,12)};bottom.Children.Add(progress);
         var buttons=new StackPanel {Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};
         buttons.Children.Add(Btn("계속 편집",()=>win.Close()));
         var start=new Button {Content="백업 후 이동 · 체험",Style=(Style)FindResource("Primary")};buttons.Children.Add(start);bottom.Children.Add(buttons);dock.Children.Add(bottom);

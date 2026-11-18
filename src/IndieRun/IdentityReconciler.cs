@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 namespace IndieRun;
 
 public static class IdentityReconciler
@@ -7,17 +7,20 @@ public static class IdentityReconciler
     {
         var markedRoot=inventory.Locations.Values.SelectMany(paths=>paths).Concat(inventory.Problems.Select(problem=>problem.Path)).Where(path=>!path.Equals(libraryRoot,StringComparison.OrdinalIgnoreCase)&&GameScanner.Within(p.Source,path)).OrderByDescending(path=>path.Length).FirstOrDefault();
         if(markedRoot==null)return;
-        p.Source=markedRoot;p.SearchRoot=Path.GetDirectoryName(markedRoot)!;p.Folder=Path.GetFileName(markedRoot);p.Name=p.Folder;
+        p.Source=markedRoot;p.SearchRoot=FolderPolicy.Boundary(p,markedRoot,[]);p.Folder=Path.GetFileName(markedRoot);p.Name=p.Folder;
     }
-    public static void Rebind(List<Package> packages,List<FolderCheckpoint> checkpoints,LibraryDocument doc,IdentityInventory inventory,ScanSnapshot scan,string libraryRoot)
+    public static void Rebind(List<Package> packages,List<FolderCheckpoint> checkpoints,LibraryDocument doc,IdentityInventory inventory,ScanSnapshot scan,string libraryRoot,ISet<string>? protectedIds=null)
     {
+        var before=packages.ToDictionary(p=>p.Id,p=>p.Source);foreach(var game in doc.Games)if(!before.ContainsKey(game.Id)&&Path.IsPathFullyQualified(game.LastKnownPath))before[game.Id]=game.LastKnownPath;
         foreach(var pair in inventory.Locations.Where(p=>p.Value.Count==1))
         {
             if(packages.Any(p=>p.Id==pair.Key))continue;
             var candidate=packages.Find(p=>p.Source.Equals(pair.Value[0],StringComparison.OrdinalIgnoreCase));
             if(candidate==null||doc.Games.Any(g=>g.Id==candidate.Id))continue;
+            if(candidate.LocalRegistration||protectedIds?.Contains(candidate.Id)==true||candidate.ContentOwnerId.Length>0||candidate.CompositionParentId.Length>0||packages.Any(p=>p.Contents.Any(c=>c.Id==candidate.Id)||p.RelatedFolders.Any(r=>r.Id==candidate.Id)))continue;
             var oldId=candidate.Id;candidate.Id=pair.Key;foreach(var c in checkpoints.Where(c=>c.PackageId==oldId))c.PackageId=pair.Key;
             var stored=doc.Games.Find(g=>g.Id==pair.Key);
+            if(stored!=null&&candidate.ScopeHistory.Count==0&&candidate.OmittedFolders.Count==0&&candidate.Contents.Count==0)StoredScope.Apply(stored.Scope,candidate);
             if(stored!=null&&candidate.Alias.Length==0&&candidate.Genres.Count==0&&candidate.Categories.Count==0)
             {candidate.Alias=stored.Alias;candidate.Genres=[..stored.Genres];candidate.Categories=[..stored.Categories];candidate.GenreIds=[..stored.GenreIds];candidate.CategoryIds=[..stored.CategoryIds];}
         }
@@ -25,33 +28,56 @@ public static class IdentityReconciler
         {
             if(packages.Any(p=>p.Id==game.Id))continue;
             var paths=inventory.Locations.GetValueOrDefault(game.Id);
-            var path=paths?.Count==1?paths[0]:Path.Combine(libraryRoot,game.Folder);
-            if(packages.Any(p=>GameScanner.Within(path,p.Source)||GameScanner.Within(p.Source,path)))continue;
+            var local=Path.Combine(libraryRoot,game.Folder);
+            var path=paths?.Count==1?paths[0]:paths?.Contains(local,StringComparer.OrdinalIgnoreCase)==true?local:Path.IsPathFullyQualified(game.LastKnownPath)?game.LastKnownPath:local;
+            if(packages.Any(p=>p.Source.Equals(path,StringComparison.OrdinalIgnoreCase)&&p.Id!=game.Id))continue;
             var p=new Package {IsReal=true,Id=game.Id,Source=path,SearchRoot=Path.GetDirectoryName(path)!,DetectedRoot=path,Folder=Path.GetFileName(path),Name=Path.GetFileName(path),Alias=game.Alias,IsContent=game.IsContent,ContentOwnerId=game.ContentOwnerId,CompositionParentId=game.CompositionParentId,Genres=[..game.Genres],Categories=[..game.Categories],GenreIds=[..game.GenreIds],CategoryIds=[..game.CategoryIds]};
+            StoredScope.Apply(game.Scope,p);
             var executable=game.Executables.FirstOrDefault();if(executable!=null)p.DetectedRoot=Path.GetDirectoryName(Path.Combine(path,executable))!;
             packages.Add(p);
             if(paths?.Count==1)checkpoints.Add(WorkspaceReconciler.Capture(p,scan));
         }
-        foreach(var p in packages)
+        foreach(var p in packages.ToList())
         {
-            if(!inventory.Locations.TryGetValue(p.Id,out var paths)||paths.Count!=1)continue;
+            if(!packages.Contains(p)||!inventory.Locations.TryGetValue(p.Id,out var paths)||paths.Count!=1)continue;
             var next=paths[0];if(next.Equals(p.Source,StringComparison.OrdinalIgnoreCase))continue;
-            if(packages.Any(q=>q!=p&&(GameScanner.Within(next,q.Source)||GameScanner.Within(q.Source,next))))continue;
-            var relative=Path.GetRelativePath(p.Source,p.DetectedRoot);var oldFolder=p.Folder;
-            p.ScopeHistory.Clear();p.Source=next;p.SearchRoot=Path.GetDirectoryName(next)!;p.DetectedRoot=relative=="."?next:Path.Combine(next,relative);p.Folder=Path.GetFileName(next);
-            if(!p.Planned||p.Name==oldFolder)p.Name=p.Folder;
-            var baseline=checkpoints.Find(c=>c.PackageId==p.Id);if(baseline!=null)baseline.Source=next;
+            if(Directory.Exists(p.Source))
+            {
+                try{var existing=LibraryStore.ReadIdentity(p.Source);if(existing?.GameId==p.Id&&!paths.Contains(p.Source,StringComparer.OrdinalIgnoreCase))paths.Add(p.Source);}
+                catch(Exception ex)when(ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
+                {if(!inventory.Problems.Any(problem=>problem.Path.Equals(p.Source,StringComparison.OrdinalIgnoreCase)))inventory.Problems.Add(new(p.Source,ex.Message));}
+                continue;
+            }
+            if(!RegisteredTree.TryRelocation(p,next,packages,before,inventory,scan,out var group))continue;
+            foreach(var helper in packages.Where(q=>q!=p&&FolderPolicy.UnownedAncestor(q,next)&&FolderPolicy.Redundant(q,next,scan)&&protectedIds?.Contains(q.Id)!=true).ToList()){packages.Remove(helper);checkpoints.RemoveAll(c=>c.PackageId==helper.Id);}
+            var others=packages.Where(q=>q!=p&&!group.ContainsKey(q.Id)&&FolderPolicy.Overlap(p,q,next)&&!FolderPolicy.UnownedAncestor(q,next)&&!FolderPolicy.VerifiedMissing(q.Source,scan)).ToList();
+            if(others.Any(q=>!FolderPolicy.Redundant(q,next,scan)||protectedIds?.Contains(q.Id)==true))continue;
+            foreach(var duplicate in others.Where(q=>FolderPolicy.Redundant(q,next,scan)).ToList()){packages.Remove(duplicate);checkpoints.RemoveAll(c=>c.PackageId==duplicate.Id);}
+            RegisteredTree.Apply(packages,checkpoints,group,scan);
         }
+        PathProof.FollowRelated(packages,checkpoints,before,scan);
         foreach(var marker in inventory.Locations.Where(pair=>pair.Value.Count==1))
         {
             var root=marker.Value[0];if(root.Equals(libraryRoot,StringComparison.OrdinalIgnoreCase)||packages.Any(p=>p.Id==marker.Key||GameScanner.Within(root,p.Source)||GameScanner.Within(p.Source,root)))continue;
-            var p=new Package {IsReal=true,Id=marker.Key,Source=root,SearchRoot=Path.GetDirectoryName(root)!,DetectedRoot=root,Folder=Path.GetFileName(root),Name=Path.GetFileName(root)};
+            var p=new Package {ScopeReviewRequired=true,IsReal=true,Id=marker.Key,Source=root,SearchRoot=Path.GetDirectoryName(root)!,DetectedRoot=root,Folder=Path.GetFileName(root),Name=Path.GetFileName(root)};
             packages.Add(p);checkpoints.Add(WorkspaceReconciler.Capture(p,scan));
+        }
+    }
+    public static void AlignLocations(IEnumerable<Package> packages,LibraryDocument library,IdentityInventory inventory)
+    {
+        foreach(var game in library.Games)
+        {
+            var p=packages.FirstOrDefault(p=>p.Id==game.Id);if(p==null||!inventory.Locations.TryGetValue(game.Id,out var paths))continue;
+            // A saved library entry and matching marker complete a registration interrupted before workspace save.
+            if(paths.Contains(p.Source,StringComparer.OrdinalIgnoreCase)&&!p.Excluded){p.Registered=true;p.LocalRegistration=false;}
+            if(paths.Count==1&&!paths[0].Equals(p.Source,StringComparison.OrdinalIgnoreCase)){game.LastKnownPath=p.Source;if(game.Status!="Unavailable")game.Status="LocationCheck";}
         }
     }
     public static void Flag(Package p,IdentityInventory inventory,LibraryDocument doc)
     {
         if(p.Excluded)return;
+        if(p.ScopeReviewRequired&&p.ReviewState is not ("missing" or "unverified" or "paused" or "offline")){p.ReviewState="scope";p.ReviewReason="이전 범위 정보가 없습니다. 이동 전에 범위를 확인하세요.";}
+        if(doc.Games.Any(g=>g.Id==p.Id&&g.Status=="LocationCheck")){p.ReviewState="relocation";p.ReviewReason="새 위치를 찾았지만 기존 연결을 확인해야 합니다.";return;}
         var problem=inventory.Problems.FirstOrDefault(e=>e.Path.Equals(p.Source,StringComparison.OrdinalIgnoreCase));
         if(problem!=null){p.ReviewState="identity";p.ReviewReason="식별 파일 확인 필요 · "+problem.Message;return;}
         var pair=inventory.Locations.FirstOrDefault(pair=>pair.Value.Any(path=>path.Equals(p.Source,StringComparison.OrdinalIgnoreCase)));

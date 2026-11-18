@@ -1,10 +1,11 @@
-﻿using System.IO;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
 namespace IndieRun;
 
 public sealed class PortableGame
 {
+    public StoredScope? Scope {get;set;}
     public string Format {get;set;}="IndieRun.PortableGame";
     public int Version {get;set;}=1;
     public string Id {get;set;}="";
@@ -31,7 +32,7 @@ public static class PortableStore
     {
         if(p.Format!="IndieRun.PortableGame"||p.Version!=1||!BackupPaths.Id(p.Id)||!BackupPaths.Relative(p.Folder)||p.Folder.IndexOfAny(['\\','/'])>=0||p.Alias==null||p.Tags==null||p.GenreIds==null||p.CategoryIds==null||p.Play==null||p.Play.Id!=p.Id||p.Artwork==null||p.ArtworkHash==null||(p.Play.Image==null||p.Play.Image.Length>0))throw new InvalidDataException("게임 정보 파일을 확인하세요.");
         if(p.Contents==null||p.RelatedFolders==null||p.ContentOwnerId==null||p.CompositionParentId==null||p.ContentOwnerId.Length>0&&!BackupPaths.Id(p.ContentOwnerId)||p.CompositionParentId.Length>0&&!BackupPaths.Id(p.CompositionParentId)||p.Contents.Count>1000||p.RelatedFolders.Count>1000||p.Contents.Any(c=>c==null||c.Alias==null||c.Alias.Length>120||!BackupPaths.Id(c.Id)||!BackupPaths.Relative(c.Path)||c.Role!="related")||p.RelatedFolders.Any(r=>r==null||r.Alias==null||r.Alias.Length>120||r.Source==null||r.Name==null||!BackupPaths.Id(r.Id)||BackupEngine.MoveNameError(r.Name)!=null||r.Source.Length>0))throw new InvalidDataException("콘텐츠 연결 정보를 확인하세요.");
-        PlayerStore.Validate(new(){Games=[p.Play]});
+        StoredScope.Validate(p.Scope);PlayerStore.Validate(new(){Games=[p.Play]});
         if(p.Tags.Any(t=>t==null||!BackupPaths.Id(t.Id)||string.IsNullOrWhiteSpace(t.Name)||t.Name.Length>40||t.Name.Any(char.IsControl)||t.Kind is not ("genre" or "category"))||p.Tags.GroupBy(t=>t.Id).Any(g=>g.Count()>1)||p.GenreIds.Any(id=>!p.Tags.Any(t=>t.Id==id&&t.Kind=="genre"))||p.CategoryIds.Any(id=>!p.Tags.Any(t=>t.Id==id&&t.Kind=="category")))throw new InvalidDataException("게임 태그 정보를 확인하세요.");
         if(p.Artwork.Length>0&&(!BackupPaths.Relative(p.Artwork)||p.Artwork.IndexOfAny(['\\','/'])>=0||!ReadOnlyPreview.IsImage(p.Artwork)||p.ArtworkHash.Length!=64||!p.ArtworkHash.All(Uri.IsHexDigit)))throw new InvalidDataException("이미지 경로를 확인하세요.");
     }
@@ -41,7 +42,7 @@ public static class PortableStore
         var container=Container(targetParent,p.Id);BackupPaths.NoLinks(container);var path=Path.Combine(container,"game.json");
         if(File.Exists(path)&&BackupJson.Load<PortableGame>(path,Validate).Id!=p.Id)throw new IOException("다른 게임의 정보 파일은 덮어쓰지 않습니다."); // Never silently replace a foreign/corrupt document.
         var used=catalog.Tags.Where(t=>t.Kind=="genre"?p.Genres.Contains(t.Name):p.Categories.Contains(t.Name)).Select(Copy).ToList();
-        var record=new PortableGame {Id=p.Id,Folder=folder,Alias=p.Alias,Tags=used,GenreIds=used.Where(t=>t.Kind=="genre").Select(t=>t.Id).ToList(),CategoryIds=used.Where(t=>t.Kind=="category").Select(t=>t.Id).ToList(),Play=Copy(play)};record.IsContent=p.IsRelatedContent;record.ContentOwnerId=p.ContentOwnerId;record.CompositionParentId=p.CompositionParentId;record.Contents=Copy(p.Contents.Where(c=>c.Role=="related").ToList());record.RelatedFolders=p.RelatedFolders.Select(r=>new RelatedFolder{Id=r.Id,Name=r.Name,Alias=r.Alias,Together=r.Together}).ToList();record.Play.Id=p.Id;record.Play.Image="";
+        var record=new PortableGame {Id=p.Id,Folder=folder,Alias=p.Alias,Tags=used,GenreIds=used.Where(t=>t.Kind=="genre").Select(t=>t.Id).ToList(),CategoryIds=used.Where(t=>t.Kind=="category").Select(t=>t.Id).ToList(),Play=Copy(play)};record.Scope=StoredScope.Capture(p);record.IsContent=p.IsRelatedContent;record.ContentOwnerId=p.ContentOwnerId;record.CompositionParentId=p.CompositionParentId;record.Contents=Copy(p.Contents.Where(c=>c.Role=="related").ToList());record.RelatedFolders=p.RelatedFolders.Select(r=>new RelatedFolder{Id=r.Id,Name=r.Name,Alias=r.Alias,Together=r.Together}).ToList();record.Play.Id=p.Id;record.Play.Image="";
         if(play.Image.Length>0)
         {
             var image=BackupPaths.Child(settingsRoot,play.Image);BackupPaths.NoLinks(image);var info=new FileInfo(image);if(!ReadOnlyPreview.IsImage(image)||!info.Exists||info.Length>50L*1024*1024)throw new IOException("게임 이미지를 확인하세요. 정보 파일은 유지했습니다.");
@@ -80,6 +81,7 @@ public static class PortableStore
             play.Image=".indierun-art/"+name;
         }
         p.IsContent=record.IsContent;p.ContentOwnerId=record.ContentOwnerId;p.CompositionParentId=record.CompositionParentId;p.Contents=Copy(record.Contents);p.RelatedFolders=record.RelatedFolders.Select(r=>new RelatedFolder{Id=r.Id,Name=r.Name,Alias=r.Alias,Together=r.Together,Source=Path.Combine(Path.GetDirectoryName(p.Source)!,r.Name)}).ToList();
+        StoredScope.Apply(record.Scope,p);
         p.Alias=record.Alias;p.GenreIds=record.GenreIds.Select(id=>mapped[id]).ToList();p.CategoryIds=record.CategoryIds.Select(id=>mapped[id]).ToList();p.Genres=tags.Tags.Where(t=>p.GenreIds.Contains(t.Id)).Select(t=>t.Name).ToList();p.Categories=tags.Tags.Where(t=>p.CategoryIds.Contains(t.Id)).Select(t=>t.Name).ToList();p.Registered=true;p.PortableMetadata=true;catalog.Tags=tags.Tags;return play;
     }
 }

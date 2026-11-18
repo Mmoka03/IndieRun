@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
@@ -12,7 +12,7 @@ public partial class MainWindow
     void OrganizeOptions_Click(object sender,RoutedEventArgs e)
     {
         if(!HasSelection||running||scanning||backupBusy||scopeDraft!=null)return;
-        var menu=new ContextMenu();var edit=new MenuItem {Header="구성 수정",IsEnabled=selected.ReviewState.Length==0&&!workspaceBlocked};edit.Click+=(_,_)=>EditComposition(selected);menu.Items.Add(edit);if(HasResources(selected)){var resources=new MenuItem{Header="관련 자료"};resources.Click+=(_,_)=>ShowResources(selected);menu.Items.Add(resources);}var rename=new MenuItem{Header="폴더명 변경"};rename.Click+=(_,_)=>RenameFolder(selected);menu.Items.Add(rename);var remove=new MenuItem{Header="목록에서 제거"};remove.Click+=(_,_)=>RemoveGame(selected);menu.Items.Add(remove);menu.PlacementTarget=(Button)sender;menu.IsOpen=true;
+        var menu=new ContextMenu();var edit=new MenuItem {Header="구성 수정",IsEnabled=selected.ReviewState is "" or "scope"&&!workspaceBlocked};edit.Click+=(_,_)=>EditComposition(selected);menu.Items.Add(edit);if(HasResources(selected)){var resources=new MenuItem{Header="관련 자료"};resources.Click+=(_,_)=>ShowResources(selected);menu.Items.Add(resources);}var rename=new MenuItem{Header="폴더명 변경"};rename.Click+=(_,_)=>RenameFolder(selected);menu.Items.Add(rename);var remove=new MenuItem{Header="목록에서 제거"};remove.Click+=(_,_)=>RemoveGame(selected);menu.Items.Add(remove);menu.PlacementTarget=(Button)sender;menu.IsOpen=true;
     }
     ScanSnapshot? compositionSnapshot;
     async void EditComposition(Package original)
@@ -40,7 +40,7 @@ public partial class MainWindow
         var summary=WorkText("",12,"Text.Secondary");summary.VerticalAlignment=VerticalAlignment.Center;summary.Margin=new Thickness(0,0,16,0);footer.Children.Add(summary);root.Children.Add(footer);
         var body=new Grid();body.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});body.ColumnDefinitions.Add(new(){Width=new GridLength(300)});root.Children.Add(body);
         var left=new DockPanel{Margin=new Thickness(0,0,20,0)};body.Children.Add(left);
-        var addRelated=Btn("자료 폴더 연결",()=>{});addRelated.HorizontalAlignment=HorizontalAlignment.Left;addRelated.Margin=new Thickness(0,0,0,12);DockPanel.SetDock(addRelated,Dock.Top);left.Children.Add(addRelated);
+        var addRelated=Btn("관련 자료 추가",()=>{});addRelated.HorizontalAlignment=HorizontalAlignment.Left;addRelated.Margin=new Thickness(0,0,0,12);DockPanel.SetDock(addRelated,Dock.Top);left.Children.Add(addRelated);
         var tree=new TreeView{Name="CompositionTree",BorderThickness=new Thickness(1),BorderBrush=ThemeBrush("Border.Subtle"),Background=ThemeBrush("Surface.Primary"),Padding=new Thickness(8)};ScrollViewer.SetHorizontalScrollBarVisibility(tree,ScrollBarVisibility.Disabled);tree.Resources.Add(typeof(TreeViewItem),Application.Current.FindResource("CompositionTreeItem"));left.Children.Add(tree);
         var right=new StackPanel();Grid.SetColumn(right,1);body.Children.Add(new ScrollViewer{Content=right,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled});Grid.SetColumn(body.Children[body.Children.Count-1],1);
         var folderTitle=WorkText("폴더 선택",16,"Text.Primary");folderTitle.TextTrimming=TextTrimming.CharacterEllipsis;right.Children.Add(folderTitle);
@@ -51,6 +51,8 @@ public partial class MainWindow
         var detach=Btn("연결 해제",()=>{});detach.Margin=new Thickness(0,14,0,0);detach.Visibility=Visibility.Collapsed;detach.HorizontalAlignment=HorizontalAlignment.Left;right.Children.Add(detach);
         right.Children.Add(WorkDetails("본편의 내부 파일은 그대로 유지됩니다. DLL·데이터 폴더를 제외하면 실행되지 않을 수 있습니다. 제외한 폴더는 원래 위치에 남고, 별도 게임은 독립된 폴더로 이동합니다. 연결을 해제해도 파일을 삭제하지 않습니다.","구성 안내"));
         string chosen=draft.Source;RelatedFolder? external=null;bool updating=false;
+        var childrenByParent=scan.Directories.Distinct(StringComparer.OrdinalIgnoreCase).Where(d=>Path.GetDirectoryName(d)!=null).GroupBy(d=>Path.GetDirectoryName(d)!,StringComparer.OrdinalIgnoreCase).ToDictionary(g=>g.Key,g=>g.OrderBy(d=>d,StringComparer.OrdinalIgnoreCase).ToList(),StringComparer.OrdinalIgnoreCase);
+        var visibleChildCounts=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
         void UpdateSummary(){summary.Text=CompositionPlan.Summary(draft);apply.IsEnabled=JsonSerializer.Serialize(draft)!=initial&&!busy;}
         void ShowChoice(string path,RelatedFolder? related=null)
         {
@@ -80,8 +82,19 @@ public partial class MainWindow
             var label=OrganizeLabel(Path.GetFileName(path),13);label.Margin=new Thickness(0,0,10,0);label.ToolTip=path;row.Children.Add(label);
             var node=new TreeViewItem{IsSelected=path.Equals(chosen,StringComparison.OrdinalIgnoreCase),Header=row,Tag=path,HorizontalContentAlignment=HorizontalAlignment.Stretch,Padding=new Thickness(0,2,0,2)};
             node.Selected+=(_,e)=>{if(e.OriginalSource==node){ShowChoice(path);e.Handled=true;}};
-            var dirs=scan.Directories.Where(d=>string.Equals(Path.GetDirectoryName(d),path,StringComparison.OrdinalIgnoreCase)).OrderBy(d=>d,StringComparer.OrdinalIgnoreCase).ToList();
-            if(dirs.Count>0){node.Items.Add(new TreeViewItem{Header="…"});var loaded=false;node.Expanded+=(_,e)=>{if(e.OriginalSource!=node||loaded)return;loaded=true;node.Items.Clear();foreach(var dir in dirs.Take(150))node.Items.Add(Node(dir,depth+1));if(dirs.Count>150)node.Items.Add(new TreeViewItem{Header="폴더가 많습니다 · 더 작은 범위를 선택하세요",IsEnabled=false});};}
+            var dirs=childrenByParent.GetValueOrDefault(path)??[];
+            if(dirs.Count>0)
+            {
+                node.Items.Add(new TreeViewItem{Header="…"});var loaded=false;var count=0;TreeViewItem? moreRow=null;
+                void AddPage()
+                {
+                    if(moreRow!=null)node.Items.Remove(moreRow);
+                    var limit=Math.Min(dirs.Count,Math.Max(count+150,visibleChildCounts.GetValueOrDefault(path)));
+                    while(count<limit)node.Items.Add(Node(dirs[count++],depth+1));visibleChildCounts[path]=count;
+                    if(count<dirs.Count){var more=Btn($"폴더 더 보기 · {dirs.Count-count:N0}개 남음",AddPage);more.Margin=new Thickness(0,6,0,6);moreRow=new TreeViewItem{Header=more,Focusable=false};node.Items.Add(moreRow);}else moreRow=null;
+                }
+                node.Expanded+=(_,e)=>{if(e.OriginalSource!=node||loaded)return;loaded=true;node.Items.Clear();AddPage();};
+            }
             node.IsExpanded=depth==0||GameScanner.Within(chosen,path);return node;
         }
         void Rebuild()

@@ -1,10 +1,11 @@
-﻿using System.IO;
+using System.IO;
 using System.Text.Json;
 
 namespace IndieRun;
 
 public sealed class MoveJob
 {
+    public bool WithoutBackup {get;set;}
     public int Version { get; set; }=1;
     public string Id { get; set; }=Guid.NewGuid().ToString("N");
     public string BackupId { get; set; }="";
@@ -63,6 +64,7 @@ public sealed partial class BackupEngine
     void BoundMove(MoveJob move,BackupJob backup)
     {
         ValidateMove(move);
+        if(move.WithoutBackup!=backup.WithoutBackup)throw new InvalidDataException("이동 방식과 작업 기록이 일치하지 않습니다.");
         if(!move.Source.Equals(backup.SourceRoot,StringComparison.OrdinalIgnoreCase)||Overlap(move.Source,move.Destination)||Overlap(move.Source,Root)||Overlap(move.Destination,Root))throw new InvalidDataException("이동 기록 경로가 백업과 일치하지 않습니다.");
         foreach(var path in new[]{move.Source,move.Destination,Stage(move),Quarantine(move)})BackupPaths.NoLinks(path);
     }
@@ -77,10 +79,11 @@ public sealed partial class BackupEngine
         var move=BackupJson.Load<MoveJob>(Path.Combine(JobDirectory(backupId),"moves",id+".json"),ValidateMove);
         if(move.Id!=id||move.BackupId!=backupId)throw new InvalidDataException("이동 ID 불일치");BoundMove(move,Load(backupId));return move;
     }
+    public MoveJob ReadMove(string backupId,string id)=>LoadMove(backupId,id);
     public List<MoveJob> ListMoves(bool recoverInterrupted=true)
     {
         if(!Directory.Exists(Root))return [];
-        FileStream? held=null;if(recoverInterrupted)try{held=Acquire();}catch(IOException){}
+        FileStream? held=null;if(recoverInterrupted)try{held=Acquire();}catch(Exception ex)when(ex is IOException or UnauthorizedAccessException){}
         try
         {
             var result=new List<MoveJob>();
@@ -166,8 +169,17 @@ public sealed partial class BackupEngine
     {
         using var held=Acquire();var backup=Load(backupId);if(Removed(backup))throw new IOException("삭제한 백업으로 이동할 수 없습니다.");destination=Path.GetFullPath(destination);
         Preflight([(backup.SourceRoot,destination)]);
-        var move=new MoveJob {BackupId=backupId,BatchId=batchId,Source=backup.SourceRoot,Destination=destination,CrossVolume=ForceCopyMove||!Path.GetPathRoot(backup.SourceRoot)!.Equals(Path.GetPathRoot(destination),StringComparison.OrdinalIgnoreCase)};
+        var move=new MoveJob {WithoutBackup=backup.WithoutBackup,BackupId=backupId,BatchId=batchId,Source=backup.SourceRoot,Destination=destination,CrossVolume=ForceCopyMove||!Path.GetPathRoot(backup.SourceRoot)!.Equals(Path.GetPathRoot(destination),StringComparison.OrdinalIgnoreCase)};
         MoveState(move,"Running","Preparing");return await RunMove(backup,move,progress,cancellation);
+    }
+    void RequireSourceDeparture(BackupJob backup,MoveJob move,CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();BackupPaths.NoLinks(move.Source);
+        if(File.Exists(move.Source))throw new IOException("원본 경로에 항목이 남아 이동 결과를 확인해야 합니다.");
+        if(!Directory.Exists(move.Source))return;
+        if(backup.Package.OmittedFolders.Count==0)throw new IOException("원본 폴더가 남아 있어 이동 완료로 처리하지 않았습니다.");
+        var remaining=Index(move.Source,token,backup);
+        if(remaining.Files.Count>0||remaining.Directories.Any(d=>!d.Equals(move.Source,StringComparison.OrdinalIgnoreCase)&&!backup.Package.OmittedFolders.Any(r=>GameScanner.Within(Path.Combine(move.Source,r),d))))throw new IOException("이동 대상 파일이나 폴더가 원래 위치에 남아 있습니다.");
     }
     public async Task<MoveJob> ResumeMoveAsync(string backupId,string id,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default)
     {
@@ -184,8 +196,8 @@ public sealed partial class BackupEngine
     {
         try
         {
-            BoundMove(move,backup);if(backup.Package.OmittedFolders.Count>0)return await RunSelectiveMove(backup,move,progress,token);if(backup.Status!="Completed"||!backup.SourceVerified)throw new IOException("검증 완료된 백업이 필요합니다.");
-            MoveState(move,"Running","Checking");progress?.Report(new BackupProgress("MoveChecking",0,0,0,null));await VerifyPayload(backup,Payload(backup),new PhaseProgress(progress,"MoveChecking"),token);EnsureStage(move);
+            BoundMove(move,backup);if(backup.Package.CandidateOmissions.Any(r=>backup.Package.OmittedFolders.Contains(r,StringComparer.OrdinalIgnoreCase)&&!backup.Package.Contents.Any(c=>c.Path.Equals(r,StringComparison.OrdinalIgnoreCase)&&c.Role is "game" or "exclude")))throw new IOException("이전 버전에서 하위 실행 폴더를 자동 제외한 작업입니다. 원래 위치로 되돌린 뒤 새 이동 계획을 확인하세요.");if(backup.Package.OmittedFolders.Count>0)return await RunSelectiveMove(backup,move,progress,token);if(backup.Status!="Completed"||!backup.SourceVerified)throw new IOException("검증 완료된 백업이 필요합니다.");
+            MoveState(move,"Running","Checking");progress?.Report(new BackupProgress("MoveChecking",0,0,0,null));if(!backup.WithoutBackup)await VerifyPayload(backup,Payload(backup),new PhaseProgress(progress,"MoveChecking"),token);EnsureStage(move);
             var quarantine=Quarantine(move);var stage=StagePayload(move);
             if(!move.PublishIntent)
             {
@@ -226,7 +238,7 @@ public sealed partial class BackupEngine
                 }
                 progress?.Report(new BackupProgress("MoveVerifying",0,0,0,null));await VerifyOriginal(backup,move.Destination,token);
             }
-            token.ThrowIfCancellationRequested();MoveState(move,"Completed","Completed");Checkpoint?.Invoke("move-completed");return move;
+            RequireSourceDeparture(backup,move,token);MoveState(move,"Completed","Completed");Checkpoint?.Invoke("move-completed");return move;
         }
         catch(Exception ex) when(Expected(ex)||ex is OperationCanceledException)
         {
@@ -256,7 +268,7 @@ public sealed partial class BackupEngine
             if(move.SourceCaptured&&!move.RestoreIntent)throw new IOException("원래 위치에 다른 폴더가 있습니다. 덮어쓰지 않습니다.");
             if(move.RestoreIntent&&Directory.Exists(quarantine))throw new IOException("복구 위치가 충돌합니다.");
             if(move.PublishIntent)await VerifyOriginal(backup,move.Source,token);
-            MoveState(move,"RolledBack","RolledBack");return move;
+            MoveState(move,"RolledBack","RolledBack");await CleanupMoveStage(backup,move,token);return move;
         }
         if(!move.PublishIntent)throw new IOException("원본 위치가 외부에서 변경됐습니다. 백업을 별도 위치에 복원해 주세요.");
         EnsureStage(move);
@@ -271,14 +283,15 @@ public sealed partial class BackupEngine
             // Before publishing, leave any unrelated destination untouched.
             var published=!Directory.Exists(stage)&&Directory.Exists(move.Destination);
             if(published&&!move.UndoPrepared)await VerifyOriginal(backup,move.Destination,token);
-            await VerifyPayload(backup,Payload(backup),progress,token);
+            var survivor=backup.WithoutBackup?move.UndoPrepared&&Directory.Exists(quarantine)?quarantine:published?move.Destination:Directory.Exists(stage)?stage:quarantine:Payload(backup);
+            if(backup.WithoutBackup)await VerifyOriginal(backup,survivor,token);else await VerifyPayload(backup,survivor,progress,token);
             MoveState(move,"Running","RestoringOriginal");
-            await CopyTree(backup,Payload(backup),quarantine,move,progress,token,"RollingBack");
+            await CopyTree(backup,survivor,quarantine,move,progress,token,"RollingBack");
             move.UndoPrepared=true;MoveState(move,"Running","RemovingDestination");Checkpoint?.Invoke("undo-prepared");
             if(published)await RemoveVerified(backup,move.Destination,quarantine,token);
             move.RestoreIntent=true;MoveState(move,"Running","RestoringName");
             Directory.CreateDirectory(Path.GetDirectoryName(move.Source)!);Directory.Move(quarantine,move.Source);Checkpoint?.Invoke("undo-source-restored");
         }
-        move.SourceCaptured=false;MoveState(move,"RolledBack","RolledBack");return move;
+        move.SourceCaptured=false;MoveState(move,"RolledBack","RolledBack");await CleanupMoveStage(backup,move,token);return move;
     }
 }

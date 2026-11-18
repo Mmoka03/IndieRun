@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -31,15 +31,15 @@ public partial class MainWindow
     {
         if(!selected.IsReal||snapshot==null||IsAdded(selected)||selected.ReviewState.Length>0)return false;
         var parent=Directory.GetParent(selected.Source)?.FullName;
-        return parent!=null&&GameScanner.Within(parent,selected.SearchRoot)&&!parent.Equals(selected.SearchRoot,StringComparison.OrdinalIgnoreCase)
-            &&!packages.Any(p=>p!=selected&&(GameScanner.Within(p.Source,parent)||GameScanner.Within(parent,p.Source)));
+        return parent!=null&&GameScanner.Within(parent,selected.SearchRoot)&&FolderPolicy.RootAllowed(parent)
+            &&!packages.Any(p=>(FolderPolicy.Conflict(selected,p,parent,snapshot)&&!RegisteredTree.ExistingChild(selected,p,selected.Source,parent))||FolderPolicy.ScopeOverlap(selected,p,parent)&&!RegisteredTree.ExistingChild(selected,p,selected.Source,parent)&&!FolderPolicy.UnownedAncestor(p,parent)&&!FolderPolicy.VerifiedMissing(p.Source,snapshot)&&playerDocument.Games.Any(g=>g.Id==p.Id&&LaunchPathRepair.HasSettings(g)));
     }
     void IncludeParent_Click(object sender,RoutedEventArgs e)
     {
         if(scanning||backupBusy||running)return;
         if(scopeDraft!=null){var parent=Directory.GetParent(scopeDraft.Source)?.FullName;if(parent!=null)DraftScope(parent);return;}
         if(CanIncludeParent())SetScope(Directory.GetParent(selected.Source)!.FullName);
-        else ShowOrganizeWarning("다른 게임이 함께 포함되거나 범위를 변경할 수 없습니다.");
+        else {var parent=Directory.GetParent(selected.Source)?.FullName;if(parent!=null)ShowScopeProblem(selected,parent,"실행 폴더를 포함하는 범위를 선택하세요.");}
     }
     void ResetScope_Click(object sender,RoutedEventArgs e)
     {
@@ -54,13 +54,14 @@ public partial class MainWindow
         if(selected.Contents.Count>0||selected.RelatedFolders.Count>0){ShowOrganizeWarning("구성 수정에서 폴더 지정을 먼저 해제하세요.");return;}
         if(File.Exists(Path.Combine(selected.Source,LibraryStore.MarkerName))){ShowOrganizeWarning("식별 파일이 있는 폴더는 범위를 바꿀 수 없습니다.");return;}
         if(selected.ReviewState.Length>0){ShowOrganizeWarning("현재 폴더 상태를 먼저 확인하세요.");return;}
-        if(!GameScanner.Within(path,selected.SearchRoot)||path.Equals(selected.SearchRoot,StringComparison.OrdinalIgnoreCase)||!GameScanner.Within(selected.DetectedRoot,path)||!snapshot.Directories.Contains(path,StringComparer.OrdinalIgnoreCase))
-        {ShowOrganizeWarning("실행 후보를 포함하는 폴더를 선택하세요. 탐색 위치 전체는 포함하지 않습니다.");return;}
-        if(packages.Any(p=>p!=selected&&(GameScanner.Within(p.Source,path)||GameScanner.Within(path,p.Source))))
-        {ShowOrganizeWarning("다른 게임이 함께 포함됩니다. 범위는 변경하지 않았습니다.");return;}
+        if(!GameScanner.Within(path,selected.SearchRoot)||!FolderPolicy.RootAllowed(path)||!GameScanner.Within(selected.DetectedRoot,path)||!snapshot.Directories.Contains(path,StringComparer.OrdinalIgnoreCase))
+        {ShowOrganizeWarning("실행 후보를 포함하는 폴더를 선택하세요.");return;}
+        if(packages.Any(p=>(FolderPolicy.Conflict(selected,p,path,snapshot)&&!RegisteredTree.ExistingChild(selected,p,selected.Source,path))||FolderPolicy.ScopeOverlap(selected,p,path)&&!RegisteredTree.ExistingChild(selected,p,selected.Source,path)&&!FolderPolicy.UnownedAncestor(p,path)&&!FolderPolicy.VerifiedMissing(p.Source,snapshot)&&playerDocument.Games.Any(g=>g.Id==p.Id&&LaunchPathRepair.HasSettings(g))))
+        {ShowScopeProblem(selected,path,"기존 항목의 범위와 겹칩니다.");return;}
         if(selected.Source.Equals(path,StringComparison.OrdinalIgnoreCase))return;
-        SaveUndo();if(remember)selected.ScopeHistory.Add(selected.Source);else selected.ScopeHistory.RemoveAt(selected.ScopeHistory.Count-1);
-        var oldFolder=selected.Folder;selected.Source=path;selected.Folder=Path.GetFileName(path);
+        try{RequireUserGameFolder(path);}catch(IOException ex){ShowOrganizeWarning(ex.Message);return;}
+        SaveUndo();var redundant=packages.Where(q=>FolderPolicy.ScopeOverlap(selected,q,path)&&FolderPolicy.Redundant(q,selected.Source,snapshot)).Select(q=>q.Id).ToHashSet();packages.RemoveAll(q=>redundant.Contains(q.Id));checkpoints.RemoveAll(c=>redundant.Contains(c.PackageId));if(remember)selected.ScopeHistory.Add(selected.Source);else selected.ScopeHistory.RemoveAt(selected.ScopeHistory.Count-1);
+        var oldFolder=selected.Folder;FolderPolicy.RebaseScopeExclusions(selected,path);selected.Source=path;selected.Folder=Path.GetFileName(path);
         if(selected.Name==oldFolder)selected.Name=selected.Folder;
         var bytes=snapshot.Files.Where(f=>GameScanner.Within(f.Path,path)).Sum(f=>f.Length);selected.Size=FormatBytes(bytes);selected.Gb=bytes/(1024d*1024*1024);
         checkpoints.RemoveAll(c=>c.PackageId==selected.Id);checkpoints.Add(WorkspaceReconciler.Capture(selected,snapshot));

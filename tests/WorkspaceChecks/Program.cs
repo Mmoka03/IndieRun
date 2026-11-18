@@ -1,4 +1,5 @@
 using IndieRun;
+using System.IO;
 using System.Text.Json;
 
 static void Check(bool value,string name){if(!value)throw new Exception("FAIL: "+name);Console.WriteLine("PASS: "+name);}

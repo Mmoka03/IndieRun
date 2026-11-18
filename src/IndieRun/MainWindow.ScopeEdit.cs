@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 namespace IndieRun;
@@ -27,7 +27,8 @@ public partial class MainWindow
     void DraftScope(string path,bool remember=true)
     {
         if(scopeDraft==null||snapshot==null)return;path=Path.GetFullPath(path);
-        var problem=ScopeChange.Problem(ScopeAnchor(),path,packages);if(problem!=null){ShowOrganizeWarning(problem);return;}
+        try{RequireUserGameFolder(path);}catch(IOException ex){ShowOrganizeWarning(ex.Message);return;}
+        var problem=ScopeChange.Problem(ScopeAnchor(),path,packages,snapshot);if(problem!=null){ShowScopeProblem(ScopeAnchor(),path,problem);return;}
         if(!snapshot.Directories.Contains(path,StringComparer.OrdinalIgnoreCase)){ShowOrganizeWarning("해당 폴더를 다시 검색해 주세요.");return;}
         if(scopeDraft.Source.Equals(path,StringComparison.OrdinalIgnoreCase))return;
         if(remember)scopeDraftHistory.Add(scopeDraft.Source);else if(scopeDraftHistory.Count>0)scopeDraftHistory.RemoveAt(scopeDraftHistory.Count-1);
@@ -43,7 +44,7 @@ public partial class MainWindow
         foreach(var b in new[]{PlayerNav,OrganizeNav,TagsNav,LibraryNav,JobsNav,RescanButton})b.IsEnabled=false;
         try
         {
-            var service=ScopeChanges();var plan=Clone(CaptureWorkspace());var tags=CopyCatalog();var play=Clone(playerDocument);var library=Clone(libraryDocument);
+            RequireUserGameFolder(path);var service=ScopeChanges();var plan=Clone(CaptureWorkspace());var tags=CopyCatalog();var play=Clone(playerDocument);var library=Clone(libraryDocument);
             await Task.Run(()=>{var record=service.Prepare(plan,tags,play,library,id,path);service.Commit(record);});
             applied=true;scopeDraft=null;scopeDraftHistory.Clear();ApplyWorkspace(workspaceStore.Load().Document!);LoadPlayer();lastSavedSignature=null;history.Clear();Say("범위를 변경했습니다 · 게임 파일은 이동하지 않았습니다.");
         }
@@ -60,12 +61,12 @@ public partial class MainWindow
     void RenderScopeEditActions()
     {
         var editing=scopeDraft!=null;
-        var outer=HasSelection?Directory.GetParent(selected.Source)?.FullName:null;var possible=HasSelection&&(selected.Source!=ExecutableScopeRoot||outer!=null&&ScopeChange.Problem(selected,outer,packages)==null);
+        var outer=HasSelection?Directory.GetParent(selected.Source)?.FullName:null;var possible=HasSelection&&(selected.Source!=ExecutableScopeRoot||outer!=null&&ScopeChange.Problem(selected,outer,packages,snapshot)==null);
         EditScopeButton.Visibility=HasSelection&&IsAdded(selected)&&!editing&&possible?Visibility.Visible:Visibility.Collapsed;EditScopeButton.IsEnabled=!scanning&&!backupBusy&&!running&&selected.ReviewState.Length==0&&!workspaceBlocked;
         if(editing)
         {
             ScopeActions.Visibility=Visibility.Visible;OriginalPath.Text=scopeDraft!.Source;OriginalPath.ToolTip=OriginalPath.Text;SelectedState.Text="범위 미리보기";
-            var parent=Directory.GetParent(scopeDraft.Source)?.FullName;IncludeParentButton.Visibility=parent!=null&&GameScanner.Within(parent,selected.SearchRoot)&&!parent.Equals(selected.SearchRoot,StringComparison.OrdinalIgnoreCase)&&parent!=scopeDraftHistory.LastOrDefault()?Visibility.Visible:Visibility.Collapsed;IncludeParentButton.ToolTip=parent;
+            var parent=Directory.GetParent(scopeDraft.Source)?.FullName;IncludeParentButton.Visibility=parent!=null&&GameScanner.Within(parent,selected.SearchRoot)&&FolderPolicy.RootAllowed(parent)&&parent!=scopeDraftHistory.LastOrDefault()?Visibility.Visible:Visibility.Collapsed;IncludeParentButton.ToolTip=parent;
             ResetScopeButton.Visibility=scopeDraftHistory.Count>0?Visibility.Visible:Visibility.Collapsed;OrganizeInfoButton.Visibility=Visibility.Collapsed;MoveSelectedButton.Visibility=Visibility.Collapsed;
         }
         ExecutableScopeButton.Visibility=editing&&scopeDraftHistory.Count==0&&ScopeView.Source!=ExecutableScopeRoot?Visibility.Visible:Visibility.Collapsed;

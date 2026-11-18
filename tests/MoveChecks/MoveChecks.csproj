@@ -7,5 +7,5 @@
   <Compile Include="../../src/IndieRun/BackupModels.cs" Link="BackupModels.cs"/>
   <Compile Include="../../src/IndieRun/BackupEngine.cs" Link="BackupEngine.cs"/>
    <Compile Include="../../src/IndieRun/MoveEngine.cs" Link="MoveEngine.cs"/>
- <Compile Include="../../src/IndieRun/SelectiveMove.cs" Link="SelectiveMove.cs"/></ItemGroup>
+ <Compile Include="../../src/IndieRun/SelectiveMove.cs" Link="SelectiveMove.cs"/><Compile Include="../../src/IndieRun/DirectMoves.cs" Link="DirectMoves.cs"/></ItemGroup>
 </Project>

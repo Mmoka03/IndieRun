@@ -1,4 +1,6 @@
 using IndieRun;
+using System.IO;
+using System.Reflection;
 using System.Diagnostics;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
@@ -11,6 +13,11 @@ static WorkspaceDocument Document(string root,string alias,int entries=1)
     return new WorkspaceDocument {SearchRoot=root,Destination=Path.Combine(root,"destination"),Packages=[p],Checkpoints=[new FolderCheckpoint {PackageId=p.Id,Source=source,Files=Enumerable.Range(0,entries).Select(i=>new FileStamp($"data/file-{i:D7}.bin",100+i,638000000000000000+i)).ToList()}]};
 }
 static string Hash(string path)=>Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+static void SaveWithCheckpoint(WorkspaceStore store,WorkspaceDocument document,Action<string> checkpoint)
+{
+    try{typeof(WorkspaceStore).GetMethod("Save",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(store,[document,checkpoint]);}
+    catch(TargetInvocationException ex)when(ex.InnerException!=null){System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.InnerException).Throw();}
+}
 static void Require(bool value,string message){if(!value)throw new Exception(message);}
 static object Error(Exception ex)=>new {type=ex.GetType().Name,hresult=$"0x{ex.HResult:X8}",message=ex.Message};
 static void RestoreAccess(DirectoryInfo directory,DirectorySecurity original)
@@ -28,7 +35,7 @@ if(args[0]=="--child")
 {
     var root=args[1];var stage=args[2];var store=new WorkspaceStore(Path.Combine(root,"workspace.json"));
     var doc=Document(root,"new-state",stage=="writing"?160000:1);
-    store.Save(doc,checkpoint=>
+    SaveWithCheckpoint(store,doc,checkpoint=>
     {
         if(stage=="writing"&&checkpoint=="temporary-opened")
         {Console.WriteLine("READY");Console.Out.Flush();Console.ReadLine();}
@@ -136,7 +143,7 @@ Run("access-denied-save-directory",root=>
 Run("injected-disk-full",root=>
 {
     var store=ExistingStore(root);var before=Hash(store.FilePath);Exception? denial=null;
-    try{store.Save(Document(root,"blocked"),stage=>{if(stage=="temporary-flushed")throw new IOException("Injected disk full",unchecked((int)0x80070070));});}catch(IOException ex){denial=ex;}
+    try{SaveWithCheckpoint(store,Document(root,"blocked"),stage=>{if(stage=="temporary-flushed")throw new IOException("Injected disk full",unchecked((int)0x80070070));});}catch(IOException ex){denial=ex;}
     Require(denial!=null&&Hash(store.FilePath)==before,"Injected failure changed primary");
     return new {simulation=true,error=Error(denial!),primaryUnchanged=true,realDiskWasNotFilled=true};
 });

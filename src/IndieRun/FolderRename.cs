@@ -20,6 +20,16 @@ public sealed class FolderRename(string dataRoot)
     static T Copy<T>(T value)=>JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value))!;
     static string Map(string path,string oldRoot,string next)=>GameScanner.Within(path,oldRoot)?Path.GetRelativePath(oldRoot,path) is "."?next:Path.Combine(next,Path.GetRelativePath(oldRoot,path)):path;
     public static bool Exact(string path)=>Directory.Exists(Path.GetDirectoryName(path))&&Directory.EnumerateDirectories(Path.GetDirectoryName(path)!).Any(p=>Path.GetFileName(p).Equals(Path.GetFileName(path),StringComparison.Ordinal));
+    public static void VerifyIdentities(WorkspaceDocument plan,string root)
+    {
+        foreach(var p in plan.Packages.Where(p=>GameScanner.Within(p.Source,root)))
+        {
+            if(!p.Source.Equals(root,StringComparison.OrdinalIgnoreCase)&&!Directory.Exists(p.Source))continue;
+            var marker=LibraryStore.ReadIdentity(p.Source);
+            if(marker!=null&&marker.GameId!=p.Id||marker==null&&p.Registered==true&&!p.LocalRegistration)
+                throw new IOException("등록된 게임과 폴더의 ID가 다릅니다. 게임 폴더를 다시 연결한 뒤 이름을 변경하세요.");
+        }
+    }
     static void Validate(RenameRecord r)
     {
         if(r.Version!=1||!BackupPaths.Id(r.Id)||!Path.IsPathFullyQualified(r.OldPath)||!Path.IsPathFullyQualified(r.NewPath)||r.OldPath==r.NewPath||!string.Equals(Path.GetDirectoryName(r.OldPath),Path.GetDirectoryName(r.NewPath),StringComparison.OrdinalIgnoreCase)||BackupEngine.MoveNameError(Path.GetFileName(r.NewPath))!=null||r.Temporary!=Path.Combine(Path.GetDirectoryName(r.OldPath)!,".indierun-rename-"+r.Id)||r.Expected==null||r.Expected.Source!=r.OldPath||r.Expected.Files==null||r.Expected.Directories==null||r.Expected.Files.Any(f=>!BackupPaths.Relative(f.RelativePath))||r.Expected.Directories.Any(d=>!BackupPaths.Relative(d))||r.Bundle==null||r.MarkerId==null||r.MarkerId.Length>0&&!BackupPaths.Id(r.MarkerId))throw new InvalidDataException("폴더명 변경 기록을 확인하세요.");
@@ -30,6 +40,7 @@ public sealed class FolderRename(string dataRoot)
         if(HasPending||File.Exists(new EditTransaction(dataRoot).Pending))throw new IOException("이전 변경을 먼저 복구하세요.");
         var error=BackupEngine.MoveNameError(name);if(error!=null)throw new IOException(error);oldPath=Path.TrimEndingDirectorySeparator(Path.GetFullPath(oldPath));BackupPaths.NoLinks(oldPath);
         if(!plan.Packages.Any(p=>p.Source.Equals(oldPath,StringComparison.OrdinalIgnoreCase)||p.Contents.Any(c=>c.Role=="related"&&Path.Combine(p.Source,c.Path).Equals(oldPath,StringComparison.OrdinalIgnoreCase))))throw new IOException("게임 또는 관련 자료의 최상위 폴더만 변경할 수 있습니다.");
+        VerifyIdentities(plan,oldPath);
         if(GameScanner.Within(dataRoot,oldPath)||GameScanner.Within(plan.Destination,oldPath)||plan.BackupRoot.Length>0&&GameScanner.Within(plan.BackupRoot,oldPath))throw new IOException("프로그램 정보나 보관함 전체의 이름은 여기서 변경할 수 없습니다.");
         var next=Path.Combine(Path.GetDirectoryName(oldPath)!,name);BackupPaths.NoLinks(next);
         if(oldPath==next)throw new IOException("현재 폴더명과 같습니다.");if((Directory.Exists(next)||File.Exists(next))&&!next.Equals(oldPath,StringComparison.OrdinalIgnoreCase))throw new IOException("같은 이름이 있습니다. 다른 이름을 입력하세요.");

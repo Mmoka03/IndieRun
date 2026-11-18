@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Text.Json;
 using System.Text.Encodings.Web;
 
@@ -14,6 +14,8 @@ public sealed class BackupFile
 }
 public sealed class BackupJob
 {
+    [System.Text.Json.Serialization.JsonIgnore] public bool LegacyIncomplete=>Package.CandidateOmissions.Any(r=>Package.OmittedFolders.Contains(r,StringComparer.OrdinalIgnoreCase)&&!Package.Contents.Any(c=>c.Path.Equals(r,StringComparison.OrdinalIgnoreCase)&&c.Role is "game" or "exclude"));
+    public bool WithoutBackup {get;set;}
     public string OperationGroupId { get; set; }="";
     public bool RetainedForRecovery { get; set; }
     public string Reason { get; set; }="";
@@ -37,6 +39,7 @@ public sealed class BackupJob
 }
 public sealed class RestoreJob
 {
+    public bool IncompleteScopeAccepted {get;set;}
     public int Version { get; set; } = 1;
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string BackupId { get; set; } = "";

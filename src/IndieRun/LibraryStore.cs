@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Text;
 using System.Text.Json;
 
@@ -12,6 +12,7 @@ public sealed class GameIdentity
 }
 public sealed class LibraryGame
 {
+    public StoredScope? Scope {get;set;}
     public bool IsContent {get;set;}
     public string ContentOwnerId {get;set;}="";
     public string CompositionParentId {get;set;}="";
@@ -63,7 +64,7 @@ public sealed class LibraryStore
     }
     public static string EnsureIdentity(string folder,string preferredId)
     {
-        BackupPaths.NoLinks(folder);if(!Directory.Exists(folder))throw new DirectoryNotFoundException(folder);
+        FolderPolicy.RequireEditable(folder);BackupPaths.NoLinks(folder);if(!Directory.Exists(folder))throw new DirectoryNotFoundException(folder);
         var old=ReadIdentity(folder);if(old!=null)return old.GameId;
         var marker=new GameIdentity {GameId=BackupPaths.Id(preferredId)?preferredId:Guid.NewGuid().ToString("N")};
         var path=Path.Combine(folder,MarkerName);BackupPaths.NoLinks(path);var temp=path+".creating-"+Guid.NewGuid().ToString("N");BackupPaths.NoLinks(temp);
@@ -73,6 +74,7 @@ public sealed class LibraryStore
     }
     public static string AssignCopyIdentity(string folder,string expectedId)
     {
+        FolderPolicy.RequireEditable(folder);
         var previous=ReadIdentity(folder)??throw new IOException("식별 파일이 없습니다.");
         if(previous.GameId!=expectedId)throw new IOException("식별 정보가 변경됐습니다. 다시 확인하세요.");
         var marker=new GameIdentity {GameId=Guid.NewGuid().ToString("N")};
@@ -103,6 +105,7 @@ public sealed class LibraryStore
     {
         if(doc.Format!="IndieRun.Library"||doc.Version!=1||!BackupPaths.Id(doc.LibraryId)||doc.Games==null||doc.Tags==null||doc.Games.Count>100000)throw new InvalidDataException("지원하지 않는 보관함 형식입니다.");
         if(doc.Games.Any(g=>g==null||!BackupPaths.Id(g.Id)||!BackupPaths.Relative(g.Folder)||g.LastKnownPath==null||g.ContentOwnerId==null||g.CompositionParentId==null||g.ContentOwnerId.Length>0&&!BackupPaths.Id(g.ContentOwnerId)||g.CompositionParentId.Length>0&&!BackupPaths.Id(g.CompositionParentId)||g.Alias==null||g.Genres==null||g.Categories==null||g.GenreIds==null||g.CategoryIds==null||g.Executables==null||g.Status==null||g.Executables.Any(e=>!BackupPaths.Relative(e))||g.Genres.Any(s=>s==null)||g.Categories.Any(s=>s==null)))throw new InvalidDataException("보관함 게임 정보가 올바르지 않습니다.");
+        foreach(var game in doc.Games)StoredScope.Validate(game.Scope);
         if(doc.Games.GroupBy(g=>g.Id,StringComparer.OrdinalIgnoreCase).Any(g=>g.Count()>1)||doc.Tags.Any(t=>t==null||string.IsNullOrWhiteSpace(t.Id)||string.IsNullOrWhiteSpace(t.Name)||t.Name.Length>40||t.Kind is not ("genre" or "category"))||doc.Tags.GroupBy(t=>t.Id).Any(g=>g.Count()>1))throw new InvalidDataException("중복 ID 또는 잘못된 태그입니다.");
     }
     public LibraryDocument Load()
@@ -125,6 +128,7 @@ public sealed class LibraryStore
         var inventory=Inspect(scan);var current=ReadIdentity(package.Source);
         if(current==null&&inventory.Locations.TryGetValue(package.Id,out var marked)&&marked.Any(path=>!path.Equals(package.Source,StringComparison.OrdinalIgnoreCase)))throw new IOException("기존 ID가 다른 폴더에 있습니다. 등록된 게임의 범위를 임의로 변경하지 마세요.");
         if(current!=null&&inventory.Locations.TryGetValue(current.GameId,out var paths)&&paths.Count>1)throw new IOException("같은 ID의 복사본이 있습니다. 보관함 탭에서 먼저 구분하세요.");
+        FolderPolicy.Registration(package,scan,current?.GameId??package.Id);
         return Update(doc=>
         {
             var id=EnsureIdentity(package.Source,package.Id);
@@ -139,7 +143,7 @@ public sealed class LibraryStore
     }
     static void CopyMetadata(LibraryGame game,Package p,IEnumerable<TagDefinition> tags)
     {
-        game.IsContent=p.IsRelatedContent;game.ContentOwnerId=p.ContentOwnerId;game.CompositionParentId=p.CompositionParentId;game.Alias=p.Alias;game.Genres=[..p.Genres];game.Categories=[..p.Categories];
+        game.Scope=StoredScope.Capture(p);game.IsContent=p.IsRelatedContent;game.ContentOwnerId=p.ContentOwnerId;game.CompositionParentId=p.CompositionParentId;game.Alias=p.Alias;game.Genres=[..p.Genres];game.Categories=[..p.Categories];
         game.GenreIds=tags.Where(t=>t.Kind=="genre"&&p.Genres.Contains(t.Name)).Select(t=>t.Id).ToList();
         game.CategoryIds=tags.Where(t=>t.Kind=="category"&&p.Categories.Contains(t.Name)).Select(t=>t.Id).ToList();
     }
@@ -147,10 +151,35 @@ public sealed class LibraryStore
     {
         foreach(var tag in tags){var old=doc.Tags.Find(t=>t.Id==tag.Id);if(old!=null){old.Name=tag.Name;old.Kind=tag.Kind;}else doc.Tags.Add(new TagDefinition {Id=tag.Id,Name=tag.Name,Kind=tag.Kind});}
     }
-    public LibraryUpdate SaveMetadata(IEnumerable<Package> packages,IEnumerable<TagDefinition> tags,IdentityInventory inventory)
+    internal void ApplyObservedLocations(LibraryDocument doc,IEnumerable<Package> packages,IdentityInventory inventory,IReadOnlyDictionary<string,(string Source,string Destination)>? confirmedMoves)
+    {
+        if(confirmedMoves==null||confirmedMoves.Count==0)return;
+        foreach(var p in packages.Where(p=>!p.Excluded&&p.Registered!=false))
+        {
+            if(!confirmedMoves.TryGetValue(p.Id,out var move)||!move.Destination.Equals(p.Source,StringComparison.OrdinalIgnoreCase))continue;
+            var game=doc.Games.Find(g=>g.Id==p.Id);if(game==null||!game.LastKnownPath.Equals(move.Source,StringComparison.OrdinalIgnoreCase)&&!game.LastKnownPath.Equals(move.Destination,StringComparison.OrdinalIgnoreCase))continue;
+            if(!inventory.Locations.TryGetValue(p.Id,out var paths)||paths.Count!=1||!paths[0].Equals(move.Destination,StringComparison.OrdinalIgnoreCase))continue;
+            if(inventory.Problems.Any(problem=>problem.Path.Equals(move.Source,StringComparison.OrdinalIgnoreCase)||problem.Path.Equals(move.Destination,StringComparison.OrdinalIgnoreCase)))continue;
+            // A recorded selective move can leave excluded folders at the old path.
+            // Only its verified transition may adopt the new path; a restored old ID
+            // still creates a conflict and must never be hidden by the journal.
+            try
+            {
+                if(!move.Source.Equals(move.Destination,StringComparison.OrdinalIgnoreCase)&&ReadIdentity(move.Source)?.GameId==p.Id)
+                {paths.Add(move.Source);game.Status="Duplicate";continue;}
+                if(ReadIdentity(move.Destination)?.GameId!=p.Id)continue;
+            }
+            catch(Exception ex)when(Fault(ex)){inventory.Problems.Add(new(move.Source,ex.Message));continue;}
+            game.LastKnownPath=move.Destination;
+            game.Folder=GameScanner.Within(move.Destination,Root)?Path.GetRelativePath(Root,move.Destination):p.Name;
+            game.Status=GameScanner.Within(move.Destination,Root)?"Present":"External";
+        }
+    }
+    public LibraryUpdate SaveMetadata(IEnumerable<Package> packages,IEnumerable<TagDefinition> tags,IdentityInventory inventory,IReadOnlyDictionary<string,(string Source,string Destination)>? confirmedMoves=null)
     {
         return Update(doc=>
         {
+            ApplyObservedLocations(doc,packages,inventory,confirmedMoves);
             MergeTags(doc,tags);
             foreach(var p in packages.Where(p=>!p.Excluded))
             {
@@ -162,19 +191,44 @@ public sealed class LibraryStore
     }
     public void Reconcile(LibraryDocument doc,IdentityInventory inventory,ScanSnapshot scan,CancellationToken token=default)
     {
+        string? UncheckedStatus(string path,Package? scope=null)
+        {
+            if(scan.InactivePaths.Any(root=>GameScanner.Within(path,root)))return "Paused";
+            if(scan.OfflineRoots.Any(root=>GameScanner.Within(path,root)))return "Offline";
+            if(scope==null?scan.UnreadablePaths.Any(root=>GameScanner.Within(path,root)||GameScanner.Within(root,path)):WorkspaceReconciler.HasUnreadable(scope,scan))return "Unavailable";
+            var roots=scan.SearchRoots.Count>0?scan.SearchRoots: new List<string>{scan.Root};
+            if(!scan.ContainsDirectory(path)&&!roots.Any(root=>!string.IsNullOrWhiteSpace(root)&&GameScanner.Within(path,root)&&scan.ContainsDirectory(root)))return "NotChecked";
+            return null;
+        }
         foreach(var game in doc.Games)
         {
             token.ThrowIfCancellationRequested();
             if(!inventory.Locations.TryGetValue(game.Id,out var paths)||paths.Count==0)
             {
                 var expected=game.LastKnownPath.Length>0?game.LastKnownPath:Path.Combine(Root,game.Folder);
-                game.Status=scan.UnreadablePaths.Any(p=>GameScanner.Within(p,expected)||GameScanner.Within(expected,p))?"Unavailable":scan.ContainsDirectory(expected)?"IdentityMissing":"Missing";continue;
+                game.Status=inventory.Problems.Any(problem=>problem.Path.Equals(expected,StringComparison.OrdinalIgnoreCase))?"Unavailable":UncheckedStatus(expected)??(scan.ContainsDirectory(expected)?"IdentityMissing":"Missing");continue;
             }
             if(paths.Count>1){game.Status="Duplicate";continue;}
-            var path=paths[0];game.Status=GameScanner.Within(path,Root)?"Present":"External";
+            var path=paths[0];
+            if(game.LastKnownPath.Length>0&&!path.Equals(game.LastKnownPath,StringComparison.OrdinalIgnoreCase)&&Directory.Exists(game.LastKnownPath))
+            {
+                try
+                {
+                    var old=ReadIdentity(game.LastKnownPath);
+                    if(old?.GameId==game.Id){paths.Add(game.LastKnownPath);game.Status="Duplicate";}else game.Status="LocationCheck";
+                }
+                catch(Exception ex)when(Fault(ex))
+                {if(!inventory.Problems.Any(problem=>problem.Path.Equals(game.LastKnownPath,StringComparison.OrdinalIgnoreCase)))inventory.Problems.Add(new(game.LastKnownPath,ex.Message));game.Status="Unavailable";}
+                continue;
+            }
+            var scoped=new Package{Source=path};StoredScope.Apply(game.Scope,scoped);
+            game.Status=UncheckedStatus(path,scoped)??(GameScanner.Within(path,Root)?"Present":"External");
             if(GameScanner.Within(path,Root)&&!path.Equals(Root,StringComparison.OrdinalIgnoreCase))game.Folder=Path.GetRelativePath(Root,path);
             game.LastKnownPath=path;
-            game.Executables=scan.FilesUnder(path).Where(f=>Path.GetExtension(f.Path).Equals(".exe",StringComparison.OrdinalIgnoreCase)).Select(f=>Path.GetRelativePath(path,f.Path)).Order().ToList();
+            // A direct marker probe proves identity, not the contents of an unsearched folder.
+            if(!scan.ContainsDirectory(path)||game.Status is "Paused" or "Offline" or "Unavailable" or "NotChecked")continue;
+            var includes=scoped.Inclusion();
+            game.Executables=scan.FilesUnder(path).Where(f=>includes(f.Path)&&Path.GetExtension(f.Path).Equals(".exe",StringComparison.OrdinalIgnoreCase)).Select(f=>Path.GetRelativePath(path,f.Path)).Order().ToList();
         }
     }
     static string CsvCell(string value)

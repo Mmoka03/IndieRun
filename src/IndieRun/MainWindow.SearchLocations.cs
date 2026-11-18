@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Automation;
@@ -27,7 +27,7 @@ public partial class MainWindow
             try
             {
                 if((File.GetAttributes(picker.FolderName)&FileAttributes.ReparsePoint)!=0)throw new IOException("연결 폴더는 탐색 위치로 사용할 수 없습니다.");
-                var blocked=new[]{AppContext.BaseDirectory,backupStorageRoot,Path.Combine(projectRoot,"src")};
+                var blocked=ProtectedGameRoots();
                 if(blocked.Any(p=>GameScanner.Within(picker.FolderName,p)))throw new IOException("프로그램·소스·백업 폴더는 탐색 위치에서 제외됩니다.");
                 var nested=draft.Any(l=>GameScanner.Within(l.Path,picker.FolderName));
                 if(!SearchLocationRules.Add(draft,picker.FolderName)){message.Text="이미 등록된 상위 위치에 포함됩니다.";return;}
@@ -56,7 +56,7 @@ public partial class MainWindow
                 var row=new Grid();row.ColumnDefinitions.Add(new ColumnDefinition());row.ColumnDefinitions.Add(new ColumnDefinition {Width=GridLength.Auto});
                 var info=new StackPanel {Margin=new Thickness(0,0,16,0)};info.Children.Add(WorkText(Path.GetFileName(location.Path.TrimEnd('\\')) is {Length:>0} name?name:location.Path,16,"Text.Primary"));
                 var path=WorkText(location.Path,12,"Text.Muted");path.TextTrimming=TextTrimming.CharacterEllipsis;path.TextWrapping=TextWrapping.NoWrap;path.ToolTip=location.Path;info.Children.Add(path);
-                info.Children.Add(WorkText(Directory.Exists(location.Path)?"연결됨":"연결 안 됨 · 연결 후 다시 검색하세요",12,Directory.Exists(location.Path)?"Text.Secondary":"Warning.Text"));row.Children.Add(info);
+                info.Children.Add(WorkText(Directory.Exists(location.Path)?"연결됨":"연결 안 됨 · 연결 후 다시 검색하세요",12,Directory.Exists(location.Path)?"Text.Secondary":"Warning.Text"));info.Children.Add(ContainerPathNote(location.Path));row.Children.Add(info);
                 var tools=new StackPanel {Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center};Grid.SetColumn(tools,1);
                 var toggle=Btn(location.Enabled?"검색 켜짐":"검색 꺼짐",()=>{location.Enabled=!location.Enabled;RenderLocations();},location.Enabled);AutomationProperties.SetName(toggle,location.Path+" 검색 "+(location.Enabled?"켜짐":"꺼짐"));tools.Children.Add(toggle);
                 tools.Children.Add(Btn("등록 해제",()=>{draft.Remove(location);RenderLocations();}));row.Children.Add(tools);rows.Children.Add(WorkCard(row));
