@@ -19,10 +19,9 @@ public partial class MainWindow
     void RenderModernTags()
     {
         if(playerRoot!=destination)LoadPlayer();TagsContent.Children.Clear();
-        var top=new DockPanel {Margin=new Thickness(0,0,0,24)};var back=Btn("← 돌아가기",()=>{SetPage(tagReturnPage);if(tagReturnPage=="play")RenderPlayer();else if(tagReturnPage=="library")RenderLibrary();else Render();});DockPanel.SetDock(back,Dock.Right);top.Children.Add(back);
-        var title=new StackPanel();title.Children.Add(Text("태그를 한눈에",24));title.Children.Add(Text("이름과 사용 현황을 확인하고 관리하세요",12,"#8796AA"));top.Children.Add(title);TagsContent.Children.Add(top);
         var toolbar=new DockPanel {Margin=new Thickness(0,0,0,18)};
-        var add=Btn("＋ 새 태그",()=>EditTag(null),true);DockPanel.SetDock(add,Dock.Right);toolbar.Children.Add(add);
+        var back=Btn("← 돌아가기",()=>{SetPage(tagReturnPage);if(tagReturnPage=="play")RenderPlayer();else if(tagReturnPage=="library")RenderLibrary();else Render();});back.Margin=new Thickness(12,0,0,0);DockPanel.SetDock(back,Dock.Right);toolbar.Children.Add(back);
+        var add=Btn("＋ 새 태그",()=>EditTag(null),true);add.Margin=new Thickness(12,0,0,0);DockPanel.SetDock(add,Dock.Right);toolbar.Children.Add(add);
         foreach(var kind in new[]{"genre","category"}){var b=Btn($"{KindLabel(kind)}  {catalog.Tags.Count(t=>t.Kind==kind)}",()=>{managerKind=kind;RenderModernTags();},managerKind==kind);DockPanel.SetDock(b,Dock.Left);toolbar.Children.Add(b);}
         var query=new TextBox {Text=managerQuery,ToolTip="태그 이름 검색",MinWidth=180};AutomationProperties.SetName(query,"관리 태그 검색");toolbar.Children.Add(WithHint(query,"태그 이름 검색"));TagsContent.Children.Add(toolbar);
         var rows=new StackPanel();TagsContent.Children.Add(rows);
@@ -70,15 +69,11 @@ public partial class MainWindow
     {
         try
         {
-            var users=TagUsers(tag);var win=Modal("태그 삭제",540,300);win.MinWidth=540;win.MinHeight=300;
-            var stack=new StackPanel {Margin=new Thickness(26)};stack.Children.Add(Text("‘"+tag.Name+"’ 태그를 삭제할까요?",21));
-            stack.Children.Add(new TextBlock {Text=$"게임 {users.Count}개에서 이 태그가 제거됩니다.\n화면에 없는 등록과 찾을 수 없는 게임도 포함합니다.\n게임 파일은 유지됩니다.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,16,0,20),Foreground=B("#8E775B")});
-            var row=new WrapPanel {HorizontalAlignment=HorizontalAlignment.Right};row.Children.Add(Btn("취소",()=>win.Close()));row.Children.Add(Btn("태그 삭제",()=>
-            {
-                var next=CopyCatalog();next.Tags.RemoveAll(t=>t.Id==tag.Id);var games=Clone(packages);PlayerRules.ChangeTag(games,new LibraryDocument(),tag,null);
-                if(CommitPlayerEdit(games,next,Clone(playerDocument),[],[new TagChange {Id=tag.Id,Kind=tag.Kind,OldName=tag.Name}])){playerView.TagIds.Remove(tag.Id);SaveView();win.Close();RenderModernTags();}
-            },true));stack.Children.Add(row);win.Content=stack;win.ShowDialog();
+            var users=TagUsers(tag);
+            if(!Confirm("태그를 삭제할까요?",$"‘{tag.Name}’ 태그가 게임 {users.Count}개에서 제거됩니다.\n찾을 수 없거나 목록에서 제외한 게임도 포함합니다.","태그 삭제",destructive:true))return;
+            var next=CopyCatalog();next.Tags.RemoveAll(t=>t.Id==tag.Id);var games=Clone(packages);PlayerRules.ChangeTag(games,new LibraryDocument(),tag,null);
+            if(CommitPlayerEdit(games,next,Clone(playerDocument),[],[new TagChange {Id=tag.Id,Kind=tag.Kind,OldName=tag.Name}])){playerView.TagIds.Remove(tag.Id);SaveView();RenderModernTags();}
         }
-        catch(Exception ex) when(LibraryFault(ex)){Info("태그 삭제 확인",ex.Message);}
+        catch(Exception ex) when(LibraryFault(ex)){ErrorInfo("태그 삭제 확인","태그를 삭제하지 못했습니다.",ex.Message);}
     }
 }

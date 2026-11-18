@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 
 namespace IndieRun;
@@ -109,7 +109,7 @@ public sealed partial class BackupEngine
     }
     async Task VerifyOriginal(BackupJob backup,string path,CancellationToken token)
     {
-        MatchTree(backup,Index(path,token),true);await VerifyPayload(backup,path,null,token);
+        MatchTree(backup,Index(path,token,path.Equals(backup.SourceRoot,StringComparison.OrdinalIgnoreCase)?backup:null),true);await VerifyPayload(backup,path,null,token);
     }
     void EnsureStage(MoveJob move)
     {
@@ -121,7 +121,7 @@ public sealed partial class BackupEngine
     {
         BackupPaths.NoLinks(target);Directory.CreateDirectory(target);
         foreach(var dir in backup.Directories){var path=BackupPaths.Child(target,dir);BackupPaths.NoLinks(path);Directory.CreateDirectory(path);}
-        var scan=Index(target,token);
+        var scan=Index(target,token,target.Equals(backup.SourceRoot,StringComparison.OrdinalIgnoreCase)?backup:null);
         if(scan.Files.Any(f=>!backup.Files.Any(b=>b.RelativePath.Equals(Path.GetRelativePath(target,f.Path),StringComparison.OrdinalIgnoreCase)))||scan.Directories.Where(d=>!d.Equals(target,StringComparison.OrdinalIgnoreCase)).Any(d=>!backup.Directories.Contains(Path.GetRelativePath(target,d),StringComparer.OrdinalIgnoreCase)))throw new IOException("작업 폴더에 예상하지 못한 항목이 있습니다. 덮어쓰지 않습니다.");
         int done=0;long bytes=0;
         foreach(var file in backup.Files)
@@ -142,13 +142,15 @@ public sealed partial class BackupEngine
         }
         await VerifyOriginal(backup,target,token);
     }
+    sealed class PhaseProgress(IProgress<BackupProgress>? target,string phase):IProgress<BackupProgress>
+    {public void Report(BackupProgress value)=>target?.Report(value with {Stage=phase});}
     // Only remove an exact, verified package tree. Never use recursive directory deletion.
     async Task RemoveVerified(BackupJob backup,string path,string survivor,CancellationToken token)
     {
         BackupPaths.NoLinks(path);BackupPaths.NoLinks(survivor);
         if(!Directory.Exists(path))return;
         await VerifyOriginal(backup,survivor,token);
-        var scan=Index(path,token);
+        var scan=Index(path,token,path.Equals(backup.SourceRoot,StringComparison.OrdinalIgnoreCase)?backup:null);
         if(scan.Files.Any(f=>!backup.Files.Any(b=>b.RelativePath.Equals(Path.GetRelativePath(path,f.Path),StringComparison.OrdinalIgnoreCase)))||scan.Directories.Where(d=>!d.Equals(path,StringComparison.OrdinalIgnoreCase)).Any(d=>!backup.Directories.Contains(Path.GetRelativePath(path,d),StringComparer.OrdinalIgnoreCase)))throw new IOException("삭제 대상에 새 항목이 있어 중단했습니다.");
         foreach(var file in backup.Files)
         {
@@ -182,8 +184,8 @@ public sealed partial class BackupEngine
     {
         try
         {
-            BoundMove(move,backup);if(backup.Status!="Completed"||!backup.SourceVerified)throw new IOException("검증 완료된 백업이 필요합니다.");
-            MoveState(move,"Running","Checking");await VerifyPayload(backup,Payload(backup),progress,token);EnsureStage(move);
+            BoundMove(move,backup);if(backup.Package.OmittedFolders.Count>0)return await RunSelectiveMove(backup,move,progress,token);if(backup.Status!="Completed"||!backup.SourceVerified)throw new IOException("검증 완료된 백업이 필요합니다.");
+            MoveState(move,"Running","Checking");progress?.Report(new BackupProgress("MoveChecking",0,0,0,null));await VerifyPayload(backup,Payload(backup),new PhaseProgress(progress,"MoveChecking"),token);EnsureStage(move);
             var quarantine=Quarantine(move);var stage=StagePayload(move);
             if(!move.PublishIntent)
             {
@@ -212,7 +214,7 @@ public sealed partial class BackupEngine
                     await VerifyOriginal(backup,stage,token);Directory.Move(stage,move.Destination);Checkpoint?.Invoke("move-published");
                 }
                 if(!Directory.Exists(move.Destination))throw new IOException("목적지 복사본이 없습니다.");
-                await VerifyOriginal(backup,move.Destination,token);MoveState(move,"Running","RemovingOriginal");
+                progress?.Report(new BackupProgress("MoveVerifying",0,0,0,null));await VerifyOriginal(backup,move.Destination,token);MoveState(move,"Running","RemovingOriginal");
                 await RemoveVerified(backup,quarantine,move.Destination,token);
             }
             else
@@ -222,7 +224,7 @@ public sealed partial class BackupEngine
                     await VerifyOriginal(backup,move.Source,token);Directory.Move(move.Source,move.Destination);Checkpoint?.Invoke("move-published");
                     move.SourceCaptured=true;MoveState(move,"Running","Published");
                 }
-                await VerifyOriginal(backup,move.Destination,token);
+                progress?.Report(new BackupProgress("MoveVerifying",0,0,0,null));await VerifyOriginal(backup,move.Destination,token);
             }
             token.ThrowIfCancellationRequested();MoveState(move,"Completed","Completed");Checkpoint?.Invoke("move-completed");return move;
         }
@@ -245,6 +247,8 @@ public sealed partial class BackupEngine
     async Task<MoveJob> Undo(BackupJob backup,MoveJob move,IProgress<BackupProgress>? progress,CancellationToken token)
     {
         BoundMove(move,backup);
+        if(backup.Package.OmittedFolders.Count>0)return await UndoSelectiveMove(backup,move,progress,token);
+        progress?.Report(new BackupProgress("RollingBack",0,0,0,null));
         var quarantine=Quarantine(move);var stage=StagePayload(move);
         // When the source never left, a conflicting destination belongs to someone else.
         if(Directory.Exists(move.Source))

@@ -16,12 +16,11 @@ public partial class MainWindow : Window
     Package selected = null!;
     bool rendering;
     bool running;
-    Point dragStart;
     string destination = @"D:\IndieLibrary";
     string source = @"D:\Downloads";
 
     static Brush B(string value) => new SolidColorBrush((Color)ColorConverter.ConvertFromString(value));
-    static TextBlock Text(string value, double size = 13, string color = "#33435C") => new() { Text = value, FontSize = size, Foreground = B(color), TextWrapping = TextWrapping.Wrap };
+    static TextBlock Text(string value, double size = 13, string color = "#33435C") => new() { Text = value, FontSize = size, Foreground = color=="#33435C"?ThemeBrush("Text.Primary"):B(color), TextWrapping = TextWrapping.Wrap };
     static Button Btn(string label, Action action, bool primary = false)
     {
         var b = new Button { Content = label, Margin = new Thickness(0, 0, 8, 0) };
@@ -56,62 +55,10 @@ public partial class MainWindow : Window
 
     void Render()
     {
-        rendering = true;
-        RenderCandidates();
-        SelectedTitle.Text = !HasSelection ? "검색할 폴더를 선택하세요" : string.IsNullOrWhiteSpace(selected.Alias) ? selected.Folder : selected.Alias;
-        OriginalPath.Text = selected.Source;
-        PackageLabel.Text = HasSelection?$"패키지 {packages.IndexOf(selected)+1:00} · {selected.Size}":"이동 범위";
-        PackageLayer.BorderBrush = B(selected.Color);
-        PackageLayer.Background = new SolidColorBrush(((SolidColorBrush)B(selected.Color)).Color) { Opacity = .08 };
-        TreeRows.Children.Clear();
-        if(selected.IsReal) RenderRealTree();
-        else if(!HasSelection) TreeRows.Children.Add(Text(scanning?"폴더를 살펴보고 있어요…":"왼쪽 ‘폴더 선택’에서 시작하세요",13,"#8A98AD"));
-        else TreeRow("▾  " + (selected.LinkOnly ? "Game" : selected.Folder), "이동 범위", true);
-        if (!selected.IsReal && selected.Multi)
-        {
-            TreeRow("    ▾  NightWalk/", "본편", true);
-            TreeRow("          NightWalk.exe", "실행 파일");
-            TreeRow("    ▾  CloudHop/", "별도 게임", true);
-            TreeRow("          CloudHop.exe", "실행 파일");
-            TreeRow("        Readme.txt", "설명서");
-        }
-        else if (!selected.IsReal && selected.Comic)
-        {
-            if (!selected.LinkOnly) TreeRow("    ▾  Game/", "본편", true);
-            TreeRow("          Train.exe", "실행 파일");
-            TreeRow("          Train_Data/", "게임 데이터");
-            if (!selected.LinkOnly) TreeRow("    ▸  Comic/", selected.ComicRelated ? "관련 · 만화" : "관계 미지정", true);
-            if (!selected.LinkOnly) TreeRow("        Readme.txt", "설명서");
-        }
-        else if (!selected.IsReal && HasSelection)
-        {
-            TreeRow(selected.Id == "D" ? "        CloudHop.exe" : selected.Id == "C" ? "        NightWalk.exe" : "        Garden.exe", "본편 실행");
-            TreeRow("        Data/", "게임 데이터");
-            TreeRow("        Readme.txt", "설명서");
-        }
-        StructureSummary.Text = selected.Multi ? "게임 2개를 등록하고, 현재 상위 폴더 구조를 유지해 함께 이동합니다." : selected.LinkOnly ? "Game 폴더 전체만 이동합니다. Comic과 Readme는 원본 위치에 남습니다." : selected.Comic ? "본편과 만화를 같은 패키지로 이동합니다. 내부 구조는 유지합니다." : "선택된 폴더 전체를 이동합니다. 내부 구조는 유지합니다.";
-        if(selected.LinkOnly) StructureSummary.Text += selected.ComicRelated ? " 만화 연결은 유지합니다." : " 만화는 연결하지 않습니다.";
-        Alias.Text = selected.Alias; PhysicalName.Text = selected.Name;
-        FillTags(GenreChecks, "genre", selected.Genres);
-        FillTags(CategoryChecks, "category", selected.Categories);
-        GenreCreator.Children.Clear(); CategoryCreator.Children.Clear();
-        ContentToggle.Visibility = selected.Comic ? Visibility.Visible : Visibility.Collapsed;
-        ContentToggle.Content = selected.LinkOnly ? "이동 범위: 상위 전체로" : "이동 범위: Game 폴더만";
-        RelationToggle.Visibility=selected.Comic?Visibility.Visible:Visibility.Collapsed;
-        RelationToggle.Content=selected.ComicRelated?"논리 관계: 만화 연결 해제":"논리 관계: 만화를 본편에 연결";
-        SplitButton.Visibility = selected.Multi ? Visibility.Visible : Visibility.Collapsed;
-        NameWarning.Text = ValidateName(selected.Name);
-        if(!HasSelection)NameWarning.Text="";
-        Alias.IsEnabled=PhysicalName.IsEnabled=GenreChecks.IsEnabled=CategoryChecks.IsEnabled=HasSelection&&!scanning;
-        PreviewButton.IsEnabled=HasSelection&&!scanning;
-        ScopeActions.Visibility=selected.IsReal?Visibility.Visible:Visibility.Collapsed;
-        IncludeParentButton.IsEnabled=selected.IsReal&&CanIncludeParent();
-        ResetScopeButton.IsEnabled=selected.IsReal&&selected.ReviewState.Length==0&&!string.Equals(selected.Source,selected.DetectedRoot,StringComparison.OrdinalIgnoreCase);
-        PackageLayer.ToolTip=selected.IsReal?selected.Source:null;
-        RenderPlan();
+        rendering=true;
+        RenderOrganize();
         RefreshReviewDisplay();
-        rendering = false;
-        QueueWorkspaceSave();
+        rendering=false;QueueWorkspaceSave();
     }
     void TreeRow(string label, string role, bool bold = false)
     {
@@ -122,68 +69,8 @@ public partial class MainWindow : Window
         var badge = Badge(role); Grid.SetColumn(badge, 1); grid.Children.Add(badge);
         TreeRows.Children.Add(grid);
     }
-    void RenderCandidates()
-    {
-        CandidateList.Children.Clear(); CandidateCount.Text = $"{packages.Count(p=>!p.Excluded)}개";
-        var query = Search?.Text?.Trim() ?? "";
-        foreach (var p in packages.Where(p => !p.Excluded && (p.Alias + p.Folder).Contains(query, StringComparison.OrdinalIgnoreCase)))
-        {
-            var content = new StackPanel();
-            var ribbon = new Grid { Margin = new Thickness(0,0,0,10) };
-            var marker = new Border { Background=B(p.Color),CornerRadius=new CornerRadius(4),Padding=new Thickness(7,3,7,3),HorizontalAlignment=HorizontalAlignment.Left,Child=Text(p.IsReal?"후보":p.Multi?"2 GAMES":"GAME",10,"#FFFFFF") };
-            ribbon.Children.Add(marker); ribbon.Children.Add(new TextBlock {Text="⠿",HorizontalAlignment=HorizontalAlignment.Right,Foreground=B("#A3B0C5"),FontSize=19,ToolTip="보관함으로 드래그"});
-            content.Children.Add(ribbon);
-            var heading = Text(p.Alias.Length == 0 ? p.Folder : p.Alias, 13); heading.FontWeight = FontWeights.SemiBold;
-            content.Children.Add(heading);
-            content.Children.Add(new TextBlock { Text = p.Folder, FontSize = 11, Foreground = B("#8994A6"), TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 5, 0, 9) });
-            content.Children.Add(Text(p.Done ? "✓ 정리 완료" : p.Planned ? "● 이동 예정" : p.IsReal ? $"실행 파일 {Executables(p).Count}개 · {p.Size}" : p.Multi ? "● 실행 후보 2개 · 범위 확인" : $"실행 후보 1개 · {p.Size}", 11, p.Planned ? "#4167DA" : "#7C8799"));
-            if(p.ReviewState.Length>0) content.Children.Add(new TextBlock {Text=p.ReviewState=="missing"?"! 위치 확인":"! 변경 확인",FontSize=12,Foreground=B("#A87932"),Margin=new Thickness(0,6,0,0)});
-            var button = new Button { Content = content, HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(13), Margin = new Thickness(0, 0, 0, 10), Background = B(p == selected ? "#EDF3FF" : "#FFFFFF"), BorderBrush = B(p == selected ? "#86A6E6" : "#E9EDF4"),BorderThickness=p==selected?new Thickness(3,1,1,1):new Thickness(1),ToolTip="선택해서 확인 · 끌어서 보관함에 담기" };
-            button.Click += (_, _) => { selected = p; Render(); };
-            if(p.IsReal) { var menu=new ContextMenu();var exclude=new MenuItem {Header="이 계획에서 제외"};exclude.Click+=(_,_)=>ExcludeCandidate(p);menu.Items.Add(exclude);button.ContextMenu=menu; }
-            button.PreviewMouseLeftButtonDown += (_, e) => dragStart = e.GetPosition(this);
-            button.PreviewMouseMove += (_, e) =>
-            {
-                if (e.LeftButton != MouseButtonState.Pressed) return;
-                var pos = e.GetPosition(this);
-                if (Math.Abs(pos.X - dragStart.X) + Math.Abs(pos.Y - dragStart.Y) < 12) return;
-                selected = p;
-                DropZone.Background=B("#E6EEFF");DropZone.BorderBrush=B("#4167DA");DropZone.BorderThickness=new Thickness(2);DropTitle.Text="여기에 놓아 추가";
-                try { DragDrop.DoDragDrop(button, new DataObject("IndieRun.Package", p.Id), DragDropEffects.Move); }
-                finally { RestoreDropZone(); }
-                Render();
-            };
-            CandidateList.Children.Add(button);
-        }
-        if (CandidateList.Children.Count == 0) CandidateList.Children.Add(Text("일치하는 후보가 없습니다", 12, "#8994A6"));
-    }
-    void RenderPlan()
-    {
-        PlannedList.Children.Clear();
-        var list = packages.Where(p => !p.Excluded && p.Planned && !p.Done).ToList();
-        foreach (var p in list)
-        {
-            var stack = new StackPanel(); stack.Children.Add(Text(p.Alias.Length > 0 ? p.Alias : p.Folder));
-            stack.Children.Add(new TextBlock { Text = p.Name, FontSize=11, Foreground=B("#8693A8"), TextWrapping=TextWrapping.Wrap, Margin=new Thickness(0,5,0,8) });
-            if(p.ReviewState.Length>0)stack.Children.Add(Text("확인 필요 · 예약 유지",12,"#A87932"));
-            var remove = Btn("계획에서 빼기", () => { SaveUndo(); p.Planned = false; Render(); Say("실제 파일은 변경하지 않았습니다"); });
-            remove.Padding = new Thickness(8, 5, 8, 5); stack.Children.Add(remove);
-            PlannedList.Children.Add(new Border { BorderBrush=B(p.Color), BorderThickness=new Thickness(3,0,0,0), Background=B("#F7F9FD"), Padding=new Thickness(11), Margin=new Thickness(0,0,0,9), Child=stack });
-        }
-        if (list.Count == 0) PlannedList.Children.Add(Text("아직 추가한 패키지가 없습니다", 12, "#96A0B0"));
-        PlanCount.Text = list.Count == 0 ? "이동할 패키지를 추가하세요" : $"{list.Count}개 패키지 · 게임 {list.Sum(p => p.Multi ? 2 : 1)}개 이동 예정";
-        PlanHint.Text = list.Count == 0 ? "" : $"백업 약 {list.Sum(p => p.Gb):0.##} GB · 직접 삭제 전까지 보관";
-        StageButton.IsEnabled=HasSelection&&selected.ReviewState.Length==0&&!selected.Planned&&!selected.Done&&!scanning;
-        StageButton.Content=selected.Done?"정리 완료 ✓":selected.Planned?"담았어요 ✓":"보관함에 담기 →";
-        StageButton.Style=(Style)FindResource(list.Count>0?typeof(Button):"Primary");
-        SelectedState.Text=selected.Planned?"이동 예정에 추가됨":selected.Done?"정리 완료":"이동 전 미리보기";
-        ReviewButton.IsEnabled = list.Count > 0 && !running;
-        if(page=="tags") {PlanCount.Text="정리 일시 중지";PlanHint.Text="현재 계획은 유지됩니다";}
-        else if(page=="jobs") {PlanCount.Text="백업 · 복원 기록";PlanHint.Text="백업은 직접 삭제 전까지 보관";}
-        else if(page=="library") {PlanCount.Text="보관함 메타데이터";PlanHint.Text="고유 ID로 연결 · JSON과 CSV로 보관";}
-        else if(page=="play") {PlanCount.Text="내 게임";PlanHint.Text="실행 파일은 처음 한 번 직접 지정합니다";}
-        QueueWorkspaceSave();
-    }
+    void RenderCandidates()=>RenderOrganizeCandidates();
+    void RenderPlan()=>RenderOrganizeFooter();
     void Search_Changed(object sender, TextChangedEventArgs e) { if (selected != null) RenderCandidates(); if(!rendering)QueueWorkspaceSave(); }
     void Alias_Changed(object sender, RoutedEventArgs e)
     {
@@ -220,6 +107,7 @@ public partial class MainWindow : Window
     void DropZone_Drop(object sender, DragEventArgs e) { RestoreDropZone(); if (e.Data.GetData("IndieRun.Package") is string id && packages.Find(p => p.Id == id) is Package p) AddPackage(p); e.Handled = true; }
     void Undo_Click(object sender, RoutedEventArgs e)
     {
+        if(backupBusy||scanning||workspaceBlocked)return;
         if(history.Count==0){Say("되돌릴 편집이 없습니다");return;}
         var doc=JsonSerializer.Deserialize<WorkspaceDocument>(history.Pop())!;var id=selected.Id;
         packages=doc.Packages;checkpoints=doc.Checkpoints;selected=packages.Find(p=>p.Id==id&&!p.Excluded)??packages.FirstOrDefault(p=>!p.Excluded)??new Package();
@@ -232,12 +120,8 @@ public partial class MainWindow : Window
         var picker = new OpenFolderDialog { Title="보관 위치 미리보기 · 파일을 변경하지 않습니다" };
         if (picker.ShowDialog(this) == true) { destination=picker.FolderName; DestinationLabel.Text=destination; QueueWorkspaceSave(); Say(destination.Any(c=>c>127) ? "경로에 비ASCII 문자가 있습니다 · 호환성 주의" : "목적지 미리보기를 변경했습니다"); }
     }
-    async void Source_Click(object sender, RoutedEventArgs e)
-    {
-        var picker = new OpenFolderDialog { Title="게임을 찾을 폴더 선택" };
-        if (picker.ShowDialog(this)==true) await ScanAsync(picker.FolderName,true);
-    }
-    void Organize_Click(object sender, RoutedEventArgs e) { SetPage("organize"); Render(); Say(""); }
+    async void Source_Click(object sender,RoutedEventArgs e)=>await ManageSearchLocationsAsync();
+    void Organize_Click(object sender, RoutedEventArgs e) { SetPage("organize"); Render(); Say("게임을 추가해도 폴더는 이동하지 않습니다."); }
     void Jobs_Click(object sender, RoutedEventArgs e)
     {
         SetPage("jobs"); RenderJobs();
@@ -245,9 +129,8 @@ public partial class MainWindow : Window
     void RenderJobs() => RenderBackupJobs();
     Window Modal(string title, double width=740, double height=570)
     {
-        return new Window { Title=title,Owner=this,Width=width,Height=height,MinWidth=560,MinHeight=450,WindowStartupLocation=WindowStartupLocation.CenterOwner,ShowInTaskbar=false,Background=B("#FFFFFF") };
+        return new Window { Title=title,Owner=this,Width=width,Height=height,MinWidth=560,MinHeight=450,WindowStartupLocation=WindowStartupLocation.CenterOwner,ShowInTaskbar=false,Background=ThemeBrush("Surface.Primary") };
     }
-    void Info(string title,string value) => MessageBox.Show(this,value,title,MessageBoxButton.OK,MessageBoxImage.Information);
     void Preview_Click(object sender, RoutedEventArgs e)
     {
         if(!HasSelection)return;

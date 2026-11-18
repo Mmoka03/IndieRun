@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -25,16 +25,24 @@ public partial class MainWindow
     {
         var p=packages.Find(p=>p.Id==backup.Package.Id);if(p==null)return;
         if(!p.Source.Equals(move.Source,StringComparison.OrdinalIgnoreCase)&&!p.Source.Equals(move.Destination,StringComparison.OrdinalIgnoreCase))return;
-        var done=move.Status=="Completed";var root=done?move.Destination:move.Source;
+        var done=move.Status=="Completed";var root=done?move.Destination:move.Source;var changedLocation=!p.Source.Equals(root,StringComparison.OrdinalIgnoreCase);
+        if(done&&changedLocation&&!searchLocations.Any(l=>GameScanner.Within(root,l.Path)))SearchLocationRules.Add(searchLocations,Path.GetDirectoryName(root)!);
         var executableRoot=Path.GetRelativePath(backup.SourceRoot,backup.Package.DetectedRoot);
-        p.Source=root;p.SearchRoot=done?Path.GetDirectoryName(root)!:backup.Package.SearchRoot;
+        p.ScopeHistory.Clear();p.Source=root;p.SearchRoot=done?Path.GetDirectoryName(root)!:backup.Package.SearchRoot;
         p.DetectedRoot=executableRoot=="."?root:Path.Combine(root,executableRoot);
         p.Folder=Path.GetFileName(root);p.Name=done?p.Folder:backup.Package.Name;
-        p.Backup=true;p.Done=done;p.Planned=!done;p.ReviewState="";p.ReviewReason="";
+        if(p.CompositionMoveState!=move.Id+move.Status)
+        {
+        p.CompositionMoveState=move.Id+move.Status;
+        p.OmittedFolders=done?[]:[..backup.Package.OmittedFolders];
+        p.Contents=done?Clone(backup.Package.Contents.Where(c=>c.Role=="related").ToList()):Clone(backup.Package.Contents);
+        }
+        foreach(var owner in packages)foreach(var related in owner.RelatedFolders.Where(r=>r.Id==p.Id)){related.Source=root;related.Name=Path.GetFileName(root);}
+        p.PortableMetadata=done||backup.Package.PortableMetadata;p.Backup=true;p.Done=done;p.Planned=!done;p.ReviewState="";p.ReviewReason="";
         if(snapshot!=null)
         {
-            snapshot.Files.RemoveAll(f=>GameScanner.Within(f.Path,move.Source)||GameScanner.Within(f.Path,move.Destination));
-            snapshot.Directories.RemoveAll(d=>GameScanner.Within(d,move.Source)||GameScanner.Within(d,move.Destination));
+            snapshot.Files.RemoveAll(f=>backup.Package.Includes(f.Path)||GameScanner.Within(f.Path,move.Destination));
+            snapshot.Directories.RemoveAll(d=>backup.Package.Includes(d)&&!backup.Package.OmittedFolders.Any(r=>GameScanner.Within(Path.Combine(move.Source,r),d))||GameScanner.Within(d,move.Destination));
             snapshot.Directories.Add(root);snapshot.Directories.AddRange(backup.Directories.Select(d=>Path.Combine(root,d)));
             snapshot.Files.AddRange(backup.Files.Select(f=>new ScannedFile(Path.Combine(root,f.RelativePath),f.Length,new DateTime(f.ModifiedTicks,DateTimeKind.Utc))));
         }
@@ -42,18 +50,20 @@ public partial class MainWindow
         checkpoints.Add(new FolderCheckpoint {PackageId=p.Id,Source=root,Files=backup.Files.Select(f=>new FileStamp(f.RelativePath,f.Length,f.ModifiedTicks)).ToList(),Directories=backup.Directories.ToList()});
         history.Clear();QueueWorkspaceSave();
     }
-    void RenderMoveJobs(BackupEngine service)
+    int RenderMoveJobs(BackupEngine service,List<BackupJob> backups,Panel target,bool attention)
     {
         List<MoveJob> moves;
-        try{moves=service.ListMoves(!backupBusy);}catch(Exception ex) when(ex is IOException or InvalidDataException or UnauthorizedAccessException){JobsContent.Children.Add(Text("이동 기록 확인 필요: "+ex.Message,13,"#A57A47"));return;}
-        if(moves.Count==0)return;
-        JobsContent.Children.Add(new TextBlock {Text="이동 기록",FontSize=19,Margin=new Thickness(0,0,0,14)});
+        try{moves=service.ListMoves(!backupBusy);}catch(Exception ex) when(ex is IOException or InvalidDataException or UnauthorizedAccessException){target.Children.Add(WorkText("이동 기록을 읽지 못했습니다.",13,"Warning.Text"));target.Children.Add(WorkDetails(ex.Message));return 0;}
+        moves=moves.Where(m=>(m.Status is not ("Completed" or "RolledBack"))==attention).ToList();
+        if(moves.Count==0)return 0;
+        target.Children.Add(new TextBlock {Text=attention?"확인할 이동":"이동 기록",FontSize=19,Margin=new Thickness(0,0,0,14)});
         foreach(var move in moves)
         {
-            var row=new StackPanel();row.Children.Add(Text(Path.GetFileName(move.Destination),17));
-            row.Children.Add(Text(MoveStatus(move.Status),13,move.Status=="Completed"?"#4D8B77":"#A38350"));
-            row.Children.Add(Text(move.Source+"\n→ "+move.Destination,12,"#8796AA"));
-            if(move.Error!=null)row.Children.Add(Text(move.Error,12,"#A38350"));
+            var saved=backups.Find(j=>j.Id==move.BackupId)?.Package;var game=saved==null?null:packages.Find(p=>p.Id==saved.Id)??saved;
+            var row=new StackPanel();row.Children.Add(WorkText(game==null?Path.GetFileName(move.Destination):PlayerRules.Title(game),17,"Text.Primary"));
+            row.Children.Add(WorkText(MoveStatus(move.Status),13,move.Status is "Completed" or "RolledBack"?"Success.Text":"Warning.Text"));
+            if(move.Status is "Interrupted" or "RecoveryRequired")row.Children.Add(WorkText("재개하거나 원래 위치로 복구하세요. 백업은 유지됩니다.",12));
+            row.Children.Add(WorkDetails("원본: "+move.Source+"\n도착: "+move.Destination+(move.Error==null?"":"\n\n"+move.Error)));
             var buttons=new WrapPanel {Margin=new Thickness(0,12,0,0)};
             if(move.Status is "Interrupted" or "RecoveryRequired")
             {
@@ -65,81 +75,94 @@ public partial class MainWindow
                 buttons.Children.Add(Btn("이동 폴더",()=>OpenSourceFolder(move.Destination)));
                 buttons.Children.Add(Btn("이동 되돌리기",async()=>
                 {
-                    if(MessageBox.Show(this,"게임을 종료한 뒤 진행하세요. 이 패키지를 원래 위치로 되돌릴까요?\n"+move.Source,"이동 되돌리기",MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)return;
+                    if(!Confirm("이동 되돌리기","게임을 종료한 뒤 진행하세요. 패키지를 원래 위치로 되돌립니다.","원래 위치로 이동",move.Source))return;
                     await RunMoveJob(move,true);
                 }));
             }
-            foreach(Button button in buttons.Children)button.IsEnabled=!backupBusy;
-            row.Children.Add(buttons);JobsContent.Children.Add(new Border {Child=row,Padding=new Thickness(18),Background=B("#F2F6FE"),CornerRadius=new CornerRadius(8),Margin=new Thickness(0,0,0,16)});
+            foreach(Button button in buttons.Children){button.IsEnabled=!backupBusy;button.Margin=new Thickness(0,0,8,6);}
+            row.Children.Add(buttons);target.Children.Add(WorkCard(row));
         }
+        return moves.Count;
     }
-    static string MoveStatus(string status)=>status switch {"Completed"=>"이동 완료","RolledBack"=>"원래 위치 복구 완료","Interrupted"=>"중단됨 · 작업 선택 필요","RecoveryRequired"=>"복구 필요","Running"=>"이동 처리 중","RecordError"=>"기록 확인 필요",_=>status};
+    static string MoveStatus(string status)=>status switch {"Completed"=>"이동 완료","RolledBack"=>"원래 위치로 복구 완료","Interrupted"=>"중단됨 · 작업 선택 필요","RecoveryRequired"=>"복구 필요","Running"=>"이동 처리 중","RecordError"=>"기록 확인 필요",_=>status};
     async Task RunMoveJob(MoveJob move,bool undo)
     {
         await RunBackupOperation(undo?"이동 복구":"이동 재개",async(engine,progress,token)=>
         {
             var result=undo?await engine.UndoMoveAsync(move.BackupId,move.Id,progress,token):await engine.ResumeMoveAsync(move.BackupId,move.Id,progress,token);
             await Dispatcher.InvokeAsync(()=>ApplyMoveToWorkspace(engine.Load(move.BackupId),result));
-        });
+        },subject:Path.GetFileName(move.Destination));
     }
-    async Task StartMoveBatchAsync(List<Package> list)
+    async Task StartMoveBatchAsync(List<Package> list,string? targetRoot=null)
     {
         if(backupBusy||scanning)return;
+        try{list=CompositionPlan.Moving(CompositionPlan.Expand(list,packages),targetRoot??destination);}catch(Exception ex) when(LibraryFault(ex)){ErrorInfo("구성 확인","게임 구성을 다시 확인하세요.",ex.Message);return;}
         if(list.Any(p=>p.ReviewState.Length>0)){Info("원본 확인","변경되었거나 찾을 수 없는 패키지를 먼저 확인해 주세요.");return;}
         var service=BackupService();
         try
         {
             if(service.ListMoves().Any(m=>m.Status is "Interrupted" or "RecoveryRequired" or "Running" or "RecordError"))throw new IOException("작업 탭에서 이전 이동을 먼저 복구하거나 완료해 주세요.");
-            service.Preflight(list.Select(p=>(p.Source,Path.Combine(destination,p.Name))));
+            CompositionPlan.Preflight(service,list,targetRoot??destination);
         }
-        catch(Exception ex) when(ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException){Info("이동 전 확인",ex.Message);return;}
+        catch(Exception ex) when(ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException){ErrorInfo("이동 전 확인","이동 준비 중 문제가 발생했습니다.",ex.Message);return;}
         if(!FlushWorkspace()){Info("계획 저장","정리 계획을 먼저 저장해 주세요.");return;}
-        foreach(var p in list)if(!RegisterGame(p))return;
+        foreach(var p in list){if(!RegisterGame(p))return;var live=packages.Find(q=>q.Id==p.Id);if(live!=null){live.Registered=p.Registered;live.LocalRegistration=p.LocalRegistration;}}
         if(!FlushWorkspace())return;
+        if(playerRoot!=destination)LoadPlayer();
+        try{foreach(var p in list)PortableStore.Export(Path.GetDirectoryName(CompositionPlan.Target(p,targetRoot??destination))!,p.Name,p,PlayFor(p),catalog,destination);}
+        catch(Exception ex) when(LibraryFault(ex)){ErrorInfo("게임 정보 보관","별칭·태그·실행 설정을 함께 보관하지 못해 이동을 시작하지 않았습니다. 도착 위치의 정보 파일과 권한을 확인하세요.",ex.Message);return;}
         var captured=JsonSerializer.Deserialize<List<Package>>(JsonSerializer.Serialize(list))!;
         var tags=JsonSerializer.Deserialize<List<TagDefinition>>(JsonSerializer.Serialize(catalog.Tags))!;
-        var target=destination;var batchId=Guid.NewGuid().ToString("N");
+        var target=targetRoot??destination;var batchId=Guid.NewGuid().ToString("N");
         await RunBackupOperation("이동",async(engine,progress,token)=>
         {
             var completed=new List<MoveJob>();
             for(int i=0;i<captured.Count;i++)
             {
                 var p=captured[i];
-                await Dispatcher.InvokeAsync(()=>backupBatchLabel=$"{i+1}/{captured.Count} · {(p.Alias.Length>0?p.Alias:p.Folder)}");
+                await BeginOperationItem(p,"백업 준비 중");
                 try
                 {
                     token.ThrowIfCancellationRequested();
                     var backup=await engine.CreateAsync(p,tags,progress,token);
-                    var moved=await engine.MoveAsync(backup.Id,Path.Combine(target,p.Name),batchId,progress,token);completed.Add(moved);
+                    await BeginOperationItem(p,"이동 준비 중");
+                    var moved=await engine.MoveAsync(backup.Id,CompositionPlan.Target(p,target),batchId,progress,token);completed.Add(moved);
+                    await MarkOperationItem(p.Id,"Completed");
                     await Dispatcher.InvokeAsync(()=>{ApplyMoveToWorkspace(backup,moved);FlushWorkspace();RenderBackupJobs();});
                 }
                 catch(Exception ex) when(ex is IOException or InvalidDataException or UnauthorizedAccessException or OperationCanceledException)
                 {
+                    await MarkOperationItem(p.Id,ex is OperationCanceledException?"Interrupted":"Failed",ex.Message);
                     var pending=engine.ListMoves(false).Any(m=>m.Status is "RecoveryRequired" or "Running" or "Interrupted");
-                    var choice=await Dispatcher.InvokeAsync(()=>backupCloseRequested?"stop":MoveFailureChoice(ex.Message,completed.Count,!pending&&ex is not OperationCanceledException));
+                    var choice=await Dispatcher.InvokeAsync(()=>backupCloseRequested?"stop":MoveFailureChoice(ex.Message,completed.Count,i+1<captured.Count&&!pending&&ex is not OperationCanceledException));
                     if(choice=="undo")
                     {
                         foreach(var previous in completed.AsEnumerable().Reverse())
                         {
-                            var undone=await engine.UndoMoveAsync(previous.BackupId,previous.Id,progress,CancellationToken.None);
+                            var prior=engine.Load(previous.BackupId).Package;
+                            await BeginOperationItem(prior,"원래 위치로 복구 중");
+                            MoveJob undone;
+                            try{undone=await engine.UndoMoveAsync(previous.BackupId,previous.Id,progress,CancellationToken.None);}
+                            catch(Exception recovery) when(recovery is IOException or InvalidDataException or UnauthorizedAccessException or OperationCanceledException)
+                            {await MarkOperationItem(prior.Id,"Failed",recovery.Message);throw;}
+                            await MarkOperationItem(prior.Id,"RolledBack");
                             await Dispatcher.InvokeAsync(()=>{ApplyMoveToWorkspace(engine.Load(previous.BackupId),undone);FlushWorkspace();});
                         }
                     }
                     if(choice=="continue")continue;
+                    await Dispatcher.InvokeAsync(()=>stopPending=true);
                     throw new IOException(pending?"이동이 중단됐습니다. 작업 탭에서 복구가 필요한 패키지를 확인해 주세요.":"이동을 중단했습니다. 완료된 작업과 백업은 선택에 따라 보관했습니다.",ex);
                 }
             }
-        });
+        },captured);
     }
     string MoveFailureChoice(string error,int completed,bool canContinue)
     {
-        var choice="stop";var win=Modal("이동 중단 확인",620,370);var stack=new StackPanel {Margin=new Thickness(26)};
-        stack.Children.Add(Text("다음 작업을 선택하세요",22));stack.Children.Add(Text(error,13,"#A38350"));
-        stack.Children.Add(new TextBlock {Text=$"완료 {completed}개 · 백업은 유지됩니다",Margin=new Thickness(0,16,0,16)});
-        void Add(string label,string value){var button=Btn(label,()=>{choice=value;win.Close();});button.Margin=new Thickness(0,0,0,10);stack.Children.Add(button);}
-        if(canContinue)Add("실패한 패키지는 남기고 다음 작업 계속","continue");
-        Add("중단 · 완료한 이동 유지","stop");
-        if(completed>0)Add("중단 · 완료한 이동도 되돌리기","undo");
-        win.Content=stack;win.ShowDialog();return choice;
+        var choices=new List<DialogChoice>();
+        if(canContinue)choices.Add(new("continue","실패한 패키지는 건너뛰고 계속"));
+        choices.Add(new("stop",completed>0?"이동 중단 · 완료한 이동 유지":"이동 중단",true));
+        if(completed>0)choices.Add(new("undo","이동 중단 · 완료한 이동도 되돌리기"));
+        return Choose("이동을 완료하지 못했습니다",$"완료한 패키지 {completed}개 · 백업은 유지됩니다.",choices.ToArray(),"stop",error,DialogTone.Warning,stacked:true);
     }
 }
+

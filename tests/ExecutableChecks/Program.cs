@@ -1,0 +1,65 @@
+using IndieRun;
+using System.IO;
+using System.Reflection;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Windows.Media.Imaging;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Markup;
+using System.Windows.Threading;
+using System.Xml.Linq;
+
+public static class Program
+{
+    static void Check(bool yes,string message){if(!yes)throw new Exception(message);}
+    static object? Call(object target,string name,params object?[] args)=>target.GetType().GetMethod(name,BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(target,args);
+    static T Get<T>(object target,string name)=>(T)target.GetType().GetField(name,BindingFlags.Instance|BindingFlags.NonPublic|BindingFlags.Public)!.GetValue(target)!;
+    static void Set(object target,string name,object? value)=>target.GetType().GetField(name,BindingFlags.Instance|BindingFlags.NonPublic|BindingFlags.Public)!.SetValue(target,value);
+    static void Refuse(Action action){try{action();}catch(Exception ex)when(ex is IOException or UnauthorizedAccessException or ArgumentException){return;}throw new Exception("Expected refusal");}
+    static void Wait(Task task){var frame=new DispatcherFrame();task.ContinueWith(_=>Application.Current.Dispatcher.BeginInvoke(new Action(()=>frame.Continue=false)));Dispatcher.PushFrame(frame);task.GetAwaiter().GetResult();}
+    static Package Game(string folder)=>new(){Id=Guid.NewGuid().ToString("N"),IsReal=true,Source=folder,DetectedRoot=folder,SearchRoot=Path.GetDirectoryName(folder)!,Folder=Path.GetFileName(folder),Name=Path.GetFileName(folder),Alias="실행 선택 테스트"};
+    [STAThread] public static int Main(string[] args)
+    {
+        var app=new Application {ShutdownMode=ShutdownMode.OnExplicitShutdown};var styles=XDocument.Load(Path.Combine(AppContext.BaseDirectory,"styles-source.xaml")).Root!.Elements().Single().Elements().Single();app.Resources=(ResourceDictionary)XamlReader.Parse(styles.ToString(),new ParserContext {BaseUri=new Uri(AppContext.BaseDirectory)});SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
+        var root=Path.Combine(Path.GetFullPath(args[0]),"run-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);var results=new List<object>();int failed=0;
+        void Test(string name,Action<string> test){var folder=Path.Combine(root,name);Directory.CreateDirectory(folder);try{test(folder);results.Add(new{name,status="PASS"});Console.WriteLine("PASS: "+name);}catch(Exception ex){failed++;results.Add(new{name,status="FAIL",error=ex.ToString()});Console.WriteLine("FAIL: "+name+" "+ex.Message);}}
+        string FileAt(string folder,string relative){var file=Path.Combine(folder,relative);Directory.CreateDirectory(Path.GetDirectoryName(file)!);File.WriteAllText(file,"fixture");return file;}
+        Test("nested-unicode-exe-paths-and-auxiliary-classification",folder=>{FileAt(folder,"Game.exe");FileAt(folder,"日本語/Game.exe");FileAt(folder,"UnityCrashHandler64.exe");FileAt(folder,"Config.exe");FileAt(folder,"setup.exe");FileAt(folder,"readme.txt");var r=ExecutableCandidates.Find(folder);Check(r.Candidates.Count==5&&r.Candidates.Count(c=>c.Auxiliary)==3&&r.Candidates.Last().Auxiliary,"Bad classification");Check(r.Candidates.Count(c=>c.Name=="Game.exe")==2&&r.Candidates.Select(c=>c.RelativePath).Distinct().Count()==5,"Names merged");});
+        Test("unreadable-subfolder-does-not-hide-other-candidates",folder=>{FileAt(folder,"Game.exe");var blocked=Path.Combine(folder,"blocked");Directory.CreateDirectory(blocked);FileAt(blocked,"Other.exe");var info=new DirectoryInfo(blocked);var original=FileSystemAclExtensions.GetAccessControl(info);var denied=FileSystemAclExtensions.GetAccessControl(info);denied.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!,FileSystemRights.ListDirectory,AccessControlType.Deny));try{FileSystemAclExtensions.SetAccessControl(info,denied);var r=ExecutableCandidates.Find(folder);Check(r.Candidates.Any(c=>c.Name=="Game.exe")&&r.Issues.Count>0,"Read failure not reported");}finally{FileSystemAclExtensions.SetAccessControl(info,original);}});
+        Test("native-icon-is-frozen-and-safe-to-use-on-ui-thread",folder=>{var type=typeof(ExecutablePicker).Assembly.GetType("IndieRun.ExecutableIcons")!;var bitmap=(BitmapSource?)type.GetMethod("Read",BindingFlags.Public|BindingFlags.Static)!.Invoke(null,[Path.Combine(Path.GetFullPath(args[2]),"LaunchProbe.exe")]);Check(bitmap!=null&&bitmap.IsFrozen,"Executable icon unavailable or unfrozen");});
+        Test("one-main-default-does-not-select-helper",folder=>{FileAt(folder,"Game.exe");FileAt(folder,"UnityCrashHandler64.exe");var r=ExecutableCandidates.Find(folder);Check(ExecutableCandidates.Default(r)?.Name=="Game.exe","Wrong default");});
+        Test("multiple-or-helper-only-have-no-default",folder=>{FileAt(folder,"Game32.exe");FileAt(folder,"Game64.exe");Check(ExecutableCandidates.Default(ExecutableCandidates.Find(folder))==null,"Ambiguous preselection");Check(ExecutableCandidates.Default(new([new("setup.exe",true)],[]))==null,"Helper preselection");});
+        Test("empty-folder-and-cancelled-search",folder=>{Check(ExecutableCandidates.Find(folder).Candidates.Count==0,"Empty folder not empty");using var c=new CancellationTokenSource();c.Cancel();try{ExecutableCandidates.Find(folder,c.Token);}catch(OperationCanceledException){return;}throw new Exception("Cancellation ignored");});
+        Test("manual-selection-refuses-outside-sibling-and-non-exe",folder=>{var inner=FileAt(folder,"Bin/Game.exe");Check(ExecutableCandidates.ValidateSelection(folder,inner).RelativePath==Path.Combine("Bin","Game.exe"),"Relative path incorrect");var outside=FileAt(folder+"-outside","Game.exe");Refuse(()=>ExecutableCandidates.ValidateSelection(folder,outside));Refuse(()=>ExecutableCandidates.ValidateSelection(folder,FileAt(folder,"readme.txt")));Refuse(()=>ExecutableCandidates.ValidateSelection(folder,Path.Combine(folder,"missing.exe")));});
+        Test("selection-and-cancel-never-call-save",folder=>{FileAt(folder,"Game.exe");int calls=0;var picker=new ExecutablePicker(null,Game(folder),_=>{calls++;return true;});var c=ExecutableCandidates.Find(folder).Candidates.Single();Call(picker,"ShowCandidates",new ExecutableSearch([c],[]));Call(picker,"Select",c);picker.Close();Check(!picker.Confirmed&&calls==0,"Selection or close persisted data");});
+        Test("confirmation-refuses-disappeared-file",folder=>{var file=FileAt(folder,"Game.exe");int calls=0;var picker=new ExecutablePicker(null,Game(folder),_=>{calls++;return true;});var c=ExecutableCandidates.Find(folder).Candidates.Single();Call(picker,"ShowCandidates",new ExecutableSearch([c],[]));Call(picker,"Select",c);File.Delete(file);Call(picker,"Confirm_Click",picker,new RoutedEventArgs());Check(!picker.Confirmed&&calls==0&&((Expander)picker.FindName("Details")).Visibility==Visibility.Visible,"Missing file confirmed");picker.Close();});
+        Test("failed-save-keeps-picker-unconfirmed",folder=>{FileAt(folder,"Game.exe");int calls=0;var picker=new ExecutablePicker(null,Game(folder),_=>{calls++;return false;});var c=ExecutableCandidates.Find(folder).Candidates.Single();Call(picker,"ShowCandidates",new ExecutableSearch([c],[]));Call(picker,"Select",c);Call(picker,"Confirm_Click",picker,new RoutedEventArgs());Check(!picker.Confirmed&&calls==1&&((Button)picker.FindName("LaunchButton")).IsEnabled,"Save failure confirmed");picker.Close();});
+        Test("auxiliary-choice-is-explicit-and-clears-main-selection",folder=>{FileAt(folder,"Game.exe");FileAt(folder,"Config.exe");var r=ExecutableCandidates.Find(folder);var picker=new ExecutablePicker(null,Game(folder),_=>true);Call(picker,"ShowCandidates",r);Call(picker,"Select",r.Candidates.First(c=>!c.Auxiliary));Call(picker,"Select",r.Candidates.First(c=>c.Auxiliary));Check(((ListBox)picker.FindName("MainCandidates")).SelectedItem==null&&picker.Selected!.Auxiliary&&((Expander)picker.FindName("AuxiliarySection")).IsExpanded,"Dual selection");Check(((TextBlock)picker.FindName("Status")).Text.Contains("보조"),"Helper warning missing");picker.Close();});
+        Test("advanced-settings-request-does-not-save",folder=>{var picker=new ExecutablePicker(null,Game(folder),_=>throw new Exception("Unexpected save"));Call(picker,"Advanced_Click",picker,new RoutedEventArgs());Check(picker.AdvancedRequested&&!picker.Confirmed,"Advanced opens by launching");});
+        foreach(var width in new[]{544d,684d})foreach(var scale in new[]{1d,1.5d})Test($"long-list-fixed-footer-{width}-{scale}",folder=>
+        {
+            var picker=new ExecutablePicker(null,Game(folder),_=>true);picker.FontSize=13*scale;var candidates=Enumerable.Range(0,80).Select(i=>new ExecutableCandidate("長い名前のゲームフォルダー/"+new string('A',70)+i+".exe",i%2==0)).ToList();Call(picker,"ShowCandidates",new ExecutableSearch(candidates,[]));((Expander)picker.FindName("AuxiliarySection")).IsExpanded=true;Call(picker,"ShowDetails",string.Join('\n',Enumerable.Repeat("C:\\Games\\VeryLongPath · fixture error",100)));((Expander)picker.FindName("Details")).IsExpanded=true;
+            var layout=(Grid)picker.FindName("Layout");layout.Measure(new Size(width,360));layout.Arrange(new Rect(0,0,width,360));layout.UpdateLayout();var footer=(StackPanel)picker.FindName("Footer");var y=footer.TranslatePoint(new Point(),layout).Y;Check(y>=0&&y+footer.ActualHeight<=360.5,"Footer clipped");var confirm=(Button)picker.FindName("LaunchButton");var pos=confirm.TranslatePoint(new Point(),layout);Check(pos.X>=0&&pos.X+confirm.ActualWidth<=width+.5,"Buttons overlap horizontal bounds");Check(((ScrollViewer)picker.FindName("BodyScroll")).ScrollableHeight>0,"List cannot scroll");picker.Close();
+        });
+        Test("first-choice-transaction-preserves-settings-and-launches-probe-twice",folder=>
+        {
+            var gameRoot=Path.Combine(folder,"game");var bin=Path.Combine(gameRoot,"Bin");Directory.CreateDirectory(bin);Directory.CreateDirectory(Path.Combine(gameRoot,"Runtime"));foreach(var file in Directory.GetFiles(Path.GetFullPath(args[2])))File.Copy(file,Path.Combine(bin,Path.GetFileName(file)));
+            var p=Game(gameRoot);p.Genres=["퍼즐"];p.Categories=["짧은 게임"];var marker=Path.Combine(folder,"launch.jsonl");var play=new GamePlay {Id=p.Id,Arguments=$"\"{marker}\" --fixture",WorkingDirectory="Runtime",Favorite=true,Hidden=true,Image=".indierun-art/keep.png",CropX=.3,CropY=.7};var library=Path.Combine(folder,"library");Directory.CreateDirectory(library);
+            var w=new MainWindow();Set(w,"packages",new List<Package>{p});Set(w,"selected",p);Set(w,"source",folder);Set(w,"destination",library);Set(w,"playerRoot",library);Set(w,"playerDocument",new PlayerDocument {Games=[play]});Set(w,"catalog",new TagCatalog {Tags=[new(){Kind="genre",Name="퍼즐"},new(){Kind="category",Name="짧은 게임"}]});var scan=GameScanner.Scan(gameRoot);Set(w,"snapshot",scan);Set(w,"checkpoints",new List<FolderCheckpoint>{WorkspaceReconciler.Capture(p,scan)});var store=Get<WorkspaceStore>(w,"workspaceStore");Set(w,"workspaceLock",store.AcquireLock());Set(w,"sessionReady",true);
+            try
+            {
+                var relative=Path.Combine("Bin","LaunchProbe.exe");play.WorkingDirectory="Missing";
+                try{Call(w,"SaveFirstExecutable",p.Id,relative);throw new Exception("Invalid working folder accepted");}catch(TargetInvocationException ex) when(ex.InnerException is GameLaunchException){}
+                Check(play.Executable==""&&!File.Exists(new PlayerStore(library).FilePath)&&!File.Exists(marker),"Failed validation mutated settings or launched");play.WorkingDirectory="Runtime";
+                Check((bool)Call(w,"SaveFirstExecutable",p.Id,relative)!,"Save failed");Check(!File.Exists(marker),"Selection executed program");var saved=new PlayerStore(library).Load().Games.Single();Check(saved.Executable==relative&&saved.Arguments==play.Arguments&&saved.WorkingDirectory==play.WorkingDirectory&&saved.Favorite&&saved.Hidden&&saved.Image==play.Image&&saved.CropX==.3,"Other settings changed");
+                for(int i=0;i<2;i++){using var process=PlayerStore.Launch(p,saved);Check(process.WaitForExit(5000)&&process.ExitCode==0,"Probe failed");}
+                var rows=File.ReadAllLines(marker).Select(line=>JsonDocument.Parse(line)).ToList();Check(rows.Count==2&&rows.All(row=>row.RootElement.GetProperty("working").GetString()==Path.Combine(gameRoot,"Runtime"))&&rows.All(row=>row.RootElement.GetProperty("arguments")[0].GetString()=="--fixture"),"Wrong launch arguments or folder");Check(p.Alias=="실행 선택 테스트"&&p.Genres.SequenceEqual(new[]{"퍼즐"})&&p.Categories.SequenceEqual(new[]{"짧은 게임"}),"Metadata changed");
+            }
+            finally{Set(w,"closingWithoutSave",true);w.Close();}
+        });
+        File.WriteAllText(Path.GetFullPath(args[1]),JsonSerializer.Serialize(new{root,total=results.Count,passed=results.Count-failed,failed,results},new JsonSerializerOptions{WriteIndented=true}));Console.WriteLine($"RESULT: {results.Count-failed}/{results.Count}");return failed==0?0:1;
+    }
+}
+

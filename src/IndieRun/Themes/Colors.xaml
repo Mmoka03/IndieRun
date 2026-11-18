@@ -1,0 +1,28 @@
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- Semantic roles shared by controls and new repair UI. A dark palette can replace this dictionary. -->
+  <SolidColorBrush x:Key="Surface.Window" Color="#F5F7FB"/>
+  <SolidColorBrush x:Key="Surface.Primary" Color="#FFFFFF"/>
+  <SolidColorBrush x:Key="Surface.Secondary" Color="#F3F6FB"/>
+  <SolidColorBrush x:Key="Text.Primary" Color="#25334B"/>
+  <SolidColorBrush x:Key="Text.Secondary" Color="#536884"/>
+  <SolidColorBrush x:Key="Text.Muted" Color="#7D8FAA"/>
+  <SolidColorBrush x:Key="Text.Hint" Color="#98A6BA"/>
+  <SolidColorBrush x:Key="Border.Subtle" Color="#DDE4EF"/>
+  <SolidColorBrush x:Key="Border.Hover" Color="#A7B9DA"/>
+  <SolidColorBrush x:Key="Border.Focus" Color="#8EA9E5"/>
+  <SolidColorBrush x:Key="Accent.Fill" Color="#4167DA"/>
+  <SolidColorBrush x:Key="Accent.Text" Color="#365FC5"/>
+  <SolidColorBrush x:Key="Accent.Surface" Color="#E9EFFE"/>
+  <SolidColorBrush x:Key="Accent.OnFill" Color="#FFFFFF"/>
+  <SolidColorBrush x:Key="Success.Surface" Color="#EAF5F0"/>
+  <SolidColorBrush x:Key="Success.Text" Color="#35735E"/>
+  <SolidColorBrush x:Key="Warning.Surface" Color="#FFF1D6"/>
+  <SolidColorBrush x:Key="Warning.Text" Color="#835B18"/>
+  <SolidColorBrush x:Key="Danger.Surface" Color="#FDECEE"/>
+  <SolidColorBrush x:Key="Danger.Text" Color="#A53E46"/>
+  <SolidColorBrush x:Key="Danger.Fill" Color="#B7454B"/>
+  <SolidColorBrush x:Key="Card.Default" Color="#526784"/>
+  <SolidColorBrush x:Key="Card.Text" Color="#DCE5F4"/>
+  <SolidColorBrush x:Key="Card.Title" Color="#FFFFFF"/>
+  <LinearGradientBrush x:Key="Card.Shade" StartPoint="0,0" EndPoint="0,1"><GradientStop Color="#910D182B" Offset="0"/><GradientStop Color="#190D182B" Offset="1"/></LinearGradientBrush>
+<SolidColorBrush x:Key="Scope.Surface" Color="#F0F5FF"/><SolidColorBrush x:Key="Neutral.Surface" Color="#F3F6FB"/><SolidColorBrush x:Key="Neutral.Text" Color="#7D8FAA"/><SolidColorBrush x:Key="Composition.Related.Surface" Color="#EAF5F0"/><SolidColorBrush x:Key="Composition.Related.Text" Color="#35735E"/><SolidColorBrush x:Key="Composition.Game.Surface" Color="#F0EBFA"/><SolidColorBrush x:Key="Composition.Game.Text" Color="#71539E"/></ResourceDictionary>

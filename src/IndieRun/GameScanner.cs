@@ -8,6 +8,9 @@ public sealed record ScannedFile(string Path, long Length, DateTime ModifiedUtc)
 public sealed class ScanSnapshot
 {
     public string Root { get; init; } = "";
+    public List<string> SearchRoots {get;}=[];
+    public List<string> InactivePaths {get;}=[];
+    public List<string> OfflineRoots {get;}=[];
     public List<string> Directories { get; } = [];
     public List<ScannedFile> Files { get; } = [];
     public List<string> Issues { get; } = [];
@@ -23,6 +26,7 @@ public sealed class ScanSnapshot
 // This module only enumerates directories and file metadata. It never launches or writes game files.
 public static class GameScanner
 {
+    public const string MetadataDirectoryName=".indierun-meta";
     public static bool Within(string path,string root) =>
         string.Equals(System.IO.Path.GetFullPath(path).TrimEnd('\\','/'),System.IO.Path.GetFullPath(root).TrimEnd('\\','/'),StringComparison.OrdinalIgnoreCase)
         || System.IO.Path.GetFullPath(path).StartsWith(System.IO.Path.GetFullPath(root).TrimEnd('\\','/')+System.IO.Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase);
@@ -56,7 +60,7 @@ public static class GameScanner
                         if((attributes&FileAttributes.ReparsePoint)!=0){result.Issues.Add($"연결 항목 제외: {path}");continue;}
                         if((attributes&FileAttributes.Directory)!=0)
                         {
-                            if(excluded.Any(e=>Within(path,e)))continue;
+                            if(Path.GetFileName(path).Equals(MetadataDirectoryName,StringComparison.OrdinalIgnoreCase)||excluded.Any(e=>Within(path,e)))continue;
                             result.Directories.Add(path);pending.Push(path);
                         }
                         else

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -23,6 +23,7 @@ public sealed partial class BackupEngine
     static void ValidateJob(BackupJob job)
     {
         if(job.Version!=1||!BackupPaths.Id(job.Id)||!Path.IsPathFullyQualified(job.SourceRoot)||!BackupPaths.Relative(job.OriginalFolder)||job.OriginalFolder.Contains('\\')||job.OriginalFolder.Contains('/')||job.Package==null||job.Tags==null||job.Files==null||job.Directories==null)throw new InvalidDataException("잘못된 백업 기록입니다.");
+        job.Package.ValidateComposition();
         if(job.Files.Any(f=>f==null||!BackupPaths.Relative(f.RelativePath)||f.Length<0||f.ModifiedTicks<DateTime.MinValue.Ticks||f.ModifiedTicks>DateTime.MaxValue.Ticks||(f.Sha256!=null&&(f.Sha256.Length!=64||!f.Sha256.All(Uri.IsHexDigit)))))throw new InvalidDataException("잘못된 파일 기록입니다.");
         if(job.Directories.Any(d=>!BackupPaths.Relative(d))||job.Files.GroupBy(f=>f.RelativePath,StringComparer.OrdinalIgnoreCase).Any(g=>g.Count()>1)||job.Directories.Distinct(StringComparer.OrdinalIgnoreCase).Count()!=job.Directories.Count||job.Files.Any(f=>job.Directories.Contains(f.RelativePath,StringComparer.OrdinalIgnoreCase)))throw new InvalidDataException("중복 또는 충돌 경로입니다.");
         if(job.Status=="Completed"&&(!job.Indexed||!job.SourceVerified||job.Files.Any(f=>f.Sha256==null)))throw new InvalidDataException("완료 조건을 충족하지 않은 백업입니다.");
@@ -72,9 +73,9 @@ public sealed partial class BackupEngine
         }
         finally{recoveryLock?.Dispose();}
     }
-    static ScanSnapshot Index(string root,CancellationToken cancellation)
+    static ScanSnapshot Index(string root,CancellationToken cancellation,BackupJob? job=null)
     {
-        BackupPaths.NoLinks(root);var scan=GameScanner.Scan(root,cancellation:cancellation);
+        BackupPaths.NoLinks(root);var scan=GameScanner.Scan(root,job?.Package.OmittedFolders.Select(r=>Path.Combine(root,r)),cancellation:cancellation);
         if(scan.Issues.Count>0)throw new IOException("일부 항목을 읽지 못했거나 연결 항목이 있습니다. 전체 백업을 중단합니다. "+scan.Issues[0]);return scan;
     }
     static void MatchTree(BackupJob job,ScanSnapshot scan,bool compareTimes)
@@ -128,7 +129,7 @@ public sealed partial class BackupEngine
     {
         try
         {
-            token.ThrowIfCancellationRequested();var scan=Index(job.SourceRoot,token);
+            token.ThrowIfCancellationRequested();var scan=Index(job.SourceRoot,token,job);
             if(!job.Indexed)
             {
                 job.Directories=scan.Directories.Where(d=>!d.Equals(job.SourceRoot,StringComparison.OrdinalIgnoreCase)).Select(d=>Path.GetRelativePath(job.SourceRoot,d)).ToList();
@@ -159,16 +160,16 @@ public sealed partial class BackupEngine
             }
             State(job,"Verifying");Checkpoint?.Invoke("backup-verifying");
             await VerifyPayload(job,payload,progress,token);
-            MatchTree(job,Index(job.SourceRoot,token),true);
+            MatchTree(job,Index(job.SourceRoot,token,job),true);
             foreach(var file in job.Files)if(await Hash(BackupPaths.Child(job.SourceRoot,file.RelativePath),token)!=file.Sha256)throw new IOException("검증 중 원본 내용이 바뀌었습니다. 새 백업을 시작해 주세요.");
-            MatchTree(job,Index(job.SourceRoot,token),true);job.SourceVerified=true;State(job,"Completed");return job;
+            MatchTree(job,Index(job.SourceRoot,token,job),true);job.SourceVerified=true;State(job,"Completed");return job;
         }
         catch(OperationCanceledException ex){Failure(job,ex,"Cancelled");throw;}
         catch(Exception ex) when(ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException){Failure(job,ex,"Failed");throw;}
     }
     async Task VerifyPayload(BackupJob job,string payload,IProgress<BackupProgress>? progress,CancellationToken token)
     {
-        MatchTree(job,Index(payload,token),false);var done=0;long bytes=0;
+        MatchTree(job,Index(payload,token,payload.Equals(job.SourceRoot,StringComparison.OrdinalIgnoreCase)?job:null),false);var done=0;long bytes=0;
         foreach(var file in job.Files)
         {
             if(file.Sha256==null||await Hash(BackupPaths.Child(payload,file.RelativePath),token)!=file.Sha256)throw new IOException("SHA-256 불일치 또는 누락: "+file.RelativePath);

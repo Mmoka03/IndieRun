@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text;
 using System.Text.Json;
 
@@ -12,6 +12,8 @@ public sealed class GameIdentity
 }
 public sealed class LibraryGame
 {
+    public string ContentOwnerId {get;set;}="";
+    public string CompositionParentId {get;set;}="";
     public string Id { get; set; }="";
     public string Folder { get; set; }="";
     public string LastKnownPath { get; set; }="";
@@ -98,7 +100,7 @@ public sealed class LibraryStore
     static void Validate(LibraryDocument doc)
     {
         if(doc.Format!="IndieRun.Library"||doc.Version!=1||!BackupPaths.Id(doc.LibraryId)||doc.Games==null||doc.Tags==null||doc.Games.Count>100000)throw new InvalidDataException("지원하지 않는 보관함 형식입니다.");
-        if(doc.Games.Any(g=>g==null||!BackupPaths.Id(g.Id)||!BackupPaths.Relative(g.Folder)||g.LastKnownPath==null||g.Alias==null||g.Genres==null||g.Categories==null||g.GenreIds==null||g.CategoryIds==null||g.Executables==null||g.Status==null||g.Executables.Any(e=>!BackupPaths.Relative(e))||g.Genres.Any(s=>s==null)||g.Categories.Any(s=>s==null)))throw new InvalidDataException("보관함 게임 정보가 올바르지 않습니다.");
+        if(doc.Games.Any(g=>g==null||!BackupPaths.Id(g.Id)||!BackupPaths.Relative(g.Folder)||g.LastKnownPath==null||g.ContentOwnerId==null||g.CompositionParentId==null||g.ContentOwnerId.Length>0&&!BackupPaths.Id(g.ContentOwnerId)||g.CompositionParentId.Length>0&&!BackupPaths.Id(g.CompositionParentId)||g.Alias==null||g.Genres==null||g.Categories==null||g.GenreIds==null||g.CategoryIds==null||g.Executables==null||g.Status==null||g.Executables.Any(e=>!BackupPaths.Relative(e))||g.Genres.Any(s=>s==null)||g.Categories.Any(s=>s==null)))throw new InvalidDataException("보관함 게임 정보가 올바르지 않습니다.");
         if(doc.Games.GroupBy(g=>g.Id,StringComparer.OrdinalIgnoreCase).Any(g=>g.Count()>1)||doc.Tags.Any(t=>t==null||string.IsNullOrWhiteSpace(t.Id)||string.IsNullOrWhiteSpace(t.Name)||t.Name.Length>40||t.Kind is not ("genre" or "category"))||doc.Tags.GroupBy(t=>t.Id).Any(g=>g.Count()>1))throw new InvalidDataException("중복 ID 또는 잘못된 태그입니다.");
     }
     public LibraryDocument Load()
@@ -128,14 +130,14 @@ public sealed class LibraryStore
             CopyMetadata(game,package,tags);
             game.Folder=GameScanner.Within(package.Source,Root)?Path.GetRelativePath(Root,package.Source):package.Name;
             if(!BackupPaths.Relative(game.Folder))throw new IOException("보관할 폴더명을 확인해 주세요.");
-            game.LastKnownPath=package.Source;game.Executables=scan.Files.Where(f=>GameScanner.Within(f.Path,package.Source)&&Path.GetExtension(f.Path).Equals(".exe",StringComparison.OrdinalIgnoreCase)).Select(f=>Path.GetRelativePath(package.Source,f.Path)).Order().ToList();
+            game.LastKnownPath=package.Source;game.Executables=scan.Files.Where(f=>package.Includes(f.Path)&&Path.GetExtension(f.Path).Equals(".exe",StringComparison.OrdinalIgnoreCase)).Select(f=>Path.GetRelativePath(package.Source,f.Path)).Order().ToList();
             game.Status=GameScanner.Within(package.Source,Root)?"Present":"External";
             MergeTags(doc,tags);
         });
     }
     static void CopyMetadata(LibraryGame game,Package p,IEnumerable<TagDefinition> tags)
     {
-        game.Alias=p.Alias;game.Genres=[..p.Genres];game.Categories=[..p.Categories];
+        game.ContentOwnerId=p.ContentOwnerId;game.CompositionParentId=p.CompositionParentId;game.Alias=p.Alias;game.Genres=[..p.Genres];game.Categories=[..p.Categories];
         game.GenreIds=tags.Where(t=>t.Kind=="genre"&&p.Genres.Contains(t.Name)).Select(t=>t.Id).ToList();
         game.CategoryIds=tags.Where(t=>t.Kind=="category"&&p.Categories.Contains(t.Name)).Select(t=>t.Id).ToList();
     }
@@ -162,7 +164,7 @@ public sealed class LibraryStore
         {
             if(!inventory.Locations.TryGetValue(game.Id,out var paths)||paths.Count==0)
             {
-                var expected=Path.Combine(Root,game.Folder);
+                var expected=game.LastKnownPath.Length>0?game.LastKnownPath:Path.Combine(Root,game.Folder);
                 game.Status=scan.UnreadablePaths.Any(p=>GameScanner.Within(p,expected)||GameScanner.Within(expected,p))?"Unavailable":scan.Directories.Contains(expected,StringComparer.OrdinalIgnoreCase)?"IdentityMissing":"Missing";continue;
             }
             if(paths.Count>1){game.Status="Duplicate";continue;}

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 namespace IndieRun;
 
 public static class IdentityReconciler
@@ -27,7 +27,7 @@ public static class IdentityReconciler
             var paths=inventory.Locations.GetValueOrDefault(game.Id);
             var path=paths?.Count==1?paths[0]:Path.Combine(libraryRoot,game.Folder);
             if(packages.Any(p=>GameScanner.Within(path,p.Source)||GameScanner.Within(p.Source,path)))continue;
-            var p=new Package {IsReal=true,Id=game.Id,Source=path,SearchRoot=Path.GetDirectoryName(path)!,DetectedRoot=path,Folder=Path.GetFileName(path),Name=Path.GetFileName(path),Alias=game.Alias,Genres=[..game.Genres],Categories=[..game.Categories],GenreIds=[..game.GenreIds],CategoryIds=[..game.CategoryIds]};
+            var p=new Package {IsReal=true,Id=game.Id,Source=path,SearchRoot=Path.GetDirectoryName(path)!,DetectedRoot=path,Folder=Path.GetFileName(path),Name=Path.GetFileName(path),Alias=game.Alias,ContentOwnerId=game.ContentOwnerId,CompositionParentId=game.CompositionParentId,Genres=[..game.Genres],Categories=[..game.Categories],GenreIds=[..game.GenreIds],CategoryIds=[..game.CategoryIds]};
             var executable=game.Executables.FirstOrDefault();if(executable!=null)p.DetectedRoot=Path.GetDirectoryName(Path.Combine(path,executable))!;
             packages.Add(p);
             if(paths?.Count==1)checkpoints.Add(WorkspaceReconciler.Capture(p,scan));
@@ -38,7 +38,7 @@ public static class IdentityReconciler
             var next=paths[0];if(next.Equals(p.Source,StringComparison.OrdinalIgnoreCase))continue;
             if(packages.Any(q=>q!=p&&(GameScanner.Within(next,q.Source)||GameScanner.Within(q.Source,next))))continue;
             var relative=Path.GetRelativePath(p.Source,p.DetectedRoot);var oldFolder=p.Folder;
-            p.Source=next;p.SearchRoot=Path.GetDirectoryName(next)!;p.DetectedRoot=relative=="."?next:Path.Combine(next,relative);p.Folder=Path.GetFileName(next);
+            p.ScopeHistory.Clear();p.Source=next;p.SearchRoot=Path.GetDirectoryName(next)!;p.DetectedRoot=relative=="."?next:Path.Combine(next,relative);p.Folder=Path.GetFileName(next);
             if(!p.Planned||p.Name==oldFolder)p.Name=p.Folder;
             var baseline=checkpoints.Find(c=>c.PackageId==p.Id);if(baseline!=null)baseline.Source=next;
         }
@@ -57,7 +57,7 @@ public static class IdentityReconciler
         var pair=inventory.Locations.FirstOrDefault(pair=>pair.Value.Any(path=>path.Equals(p.Source,StringComparison.OrdinalIgnoreCase)));
         if(pair.Value!=null&&(pair.Value.Count>1||pair.Key!=p.Id))
         {p.ReviewState="identity";p.ReviewReason=pair.Value.Count>1?"같은 ID의 복사본이 있습니다 · 보관함에서 구분하세요":"기존 등록과 게임 ID가 다릅니다 · 보관함에서 확인하세요";return;}
-        if(doc.Games.Any(g=>g.Id==p.Id)&&!inventory.Locations.ContainsKey(p.Id)&&p.ReviewState!="missing")
+        if(doc.Games.Any(g=>g.Id==p.Id)&&!inventory.Locations.ContainsKey(p.Id)&&p.ReviewState is not ("missing" or "unverified" or "paused" or "offline"))
         {p.ReviewState="identity";p.ReviewReason="게임 식별 파일이 없습니다 · 보관함에서 다시 등록하세요";}
     }
 }

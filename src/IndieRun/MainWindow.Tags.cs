@@ -83,22 +83,24 @@ public partial class MainWindow
 
     void SetPage(string target)
     {
+        if(target!="organize"&&!LeaveScopeEdit())return;
         page=target;
+        PageFooter.Visibility=target=="organize"?Visibility.Visible:Visibility.Collapsed;FooterRow.Height=new GridLength(target=="organize"?84:0);
         PlayerPanel.Visibility=target=="play"?Visibility.Visible:Visibility.Collapsed;
         LibraryPanel.Visibility=target=="library"?Visibility.Visible:Visibility.Collapsed;
         Workbench.Visibility=target=="organize"?Visibility.Visible:Visibility.Collapsed;
         JobsPanel.Visibility=target=="jobs"?Visibility.Visible:Visibility.Collapsed;
         TagsPanel.Visibility=target=="tags"?Visibility.Visible:Visibility.Collapsed;
-        FooterActions.Visibility=target=="organize"?Visibility.Visible:Visibility.Collapsed;
+        FooterActions.Visibility=target=="organize"?Visibility.Visible:Visibility.Collapsed;ScopeUndoButton.Visibility=target=="organize"&&history.Count>0?Visibility.Visible:Visibility.Collapsed;
         foreach(var pair in new[]{(OrganizeNav,"organize"),(TagsNav,"tags"),(JobsNav,"jobs"),(LibraryNav,"library"),(PlayerNav,"play")})
         {pair.Item1.Background=target==pair.Item2?B("#344D7C"):Brushes.Transparent;pair.Item1.Foreground=target==pair.Item2?Brushes.White:B("#B8C5DC");}
-        PageTitle.Text=target=="play"?"게임 실행":target=="library"?"내 보관함":target=="tags"?"태그 관리":target=="jobs"?"이동 · 백업":"게임 정리";
-        PageSubtitle.Text=target=="play"?"별칭으로 찾고, 태그로 좁히고, 바로 실행":target=="library"?"등록 정보와 수동 변경 확인":target=="tags"?"이름 수정과 삭제는 여기에서":target=="jobs"?"진행 결과와 남겨둔 백업":"선택하고, 확인하고, 보관함에 담기";
+        PageTitle.Text=target=="play"?"게임 실행":target=="library"?"보관함":target=="tags"?"태그 관리":target=="jobs"?"작업 기록":"게임 정리";
+        PageSubtitle.Text="";PageSubtitle.Visibility=Visibility.Collapsed;
         if(target=="tags") {PlanCount.Text="정리 일시 중지";PlanHint.Text="현재 계획은 유지됩니다";Say("");}
         else if(target=="jobs") {PlanCount.Text="백업 · 복원 기록";PlanHint.Text="백업은 직접 삭제 전까지 보관";Say("");}
         else if(target=="library"){PlanCount.Text="보관함 메타데이터";PlanHint.Text="고유 ID로 연결 · JSON과 CSV로 보관";}
         else if(target=="play"){PlanCount.Text="내 게임";PlanHint.Text="실행 파일은 처음 한 번 직접 지정합니다";}
-        else RenderPlan();
+        else {RenderPlan();Say("게임을 추가해도 폴더는 이동하지 않습니다.");}
     }
     void Tags_Click(object sender,RoutedEventArgs e)
     {
@@ -110,10 +112,11 @@ public partial class MainWindow
     {
         var win=Modal("사용 가이드",640,500);var layout=new DockPanel {Margin=new Thickness(28)};
         var close=Btn("알겠어요",()=>win.Close(),true);close.IsCancel=true;close.HorizontalAlignment=HorizontalAlignment.Right;DockPanel.SetDock(close,Dock.Bottom);layout.Children.Add(close);
-        var content=new StackPanel();content.Children.Add(Text(page=="tags"?"태그 관리":page=="jobs"?"백업 · 복원":page=="play"?"내 게임 찾기 · 실행":"게임 정리, 세 단계",23));
-        var steps=page=="play"?new[]{("찾기","별칭으로 검색하고 장르·카테고리를 함께 선택해 좁힙니다."),("편집","게임의 ⋯ 메뉴에서 별칭·태그·이미지를 편집합니다. 여러 개 선택에서는 태그를 한 번에 바꿉니다."),("실행","처음 한 번 실행 파일을 확인합니다. 상세 정보는 ⋯ 메뉴에서 필요할 때 엽니다.")}:page=="tags"?new[]{("추가","만든 태그는 다음 실행에도 남습니다."),("수정 · 삭제","현재 게임의 분류에도 반영됩니다."),("돌아가기","정리 계획을 유지한 채 이어서 작업합니다.")}:page=="jobs"?new[]{("백업","정리 계획 확인에서 백업만 실행하거나 백업 후 이동을 선택하세요."),("중단 · 재개","중단된 기록에서 재개할 수 있습니다. 원본이 바뀌면 새 백업이 필요합니다."),("복원 · 보관","새 위치에 복원하고 게임을 직접 확인하세요. 백업은 자동 삭제하지 않습니다.")}:new[]{("1  선택","왼쪽 게임을 선택하고 ‘내용 보기’로 확인하세요."),("2  확인","색 영역은 이동 범위, 배지는 각 항목의 역할입니다. 분류는 선택 사항이에요."),("3  담기","카드를 오른쪽으로 끌거나 ‘보관함에 담기’를 누르세요.")};
+        var content=new StackPanel();content.Children.Add(Text(page=="tags"?"태그 관리":page=="jobs"?"백업 · 복원":page=="play"?"내 게임 찾기 · 실행":"게임 추가와 정리",23));
+        var steps=page=="play"?new[]{("찾기","별칭으로 검색하고 장르·카테고리를 함께 선택해 좁힙니다."),("편집","게임의 ⋯ 메뉴에서 별칭·태그·이미지를 편집합니다. 다중 선택에서는 태그를 한 번에 바꿉니다."),("실행","처음 한 번 실행 파일을 확인합니다. 상세 정보는 ⋯ 메뉴에서 필요할 때 엽니다.")}:page=="tags"?new[]{("추가","만든 태그는 다음 실행에도 남습니다."),("수정 · 삭제","현재 게임의 분류에도 반영됩니다."),("돌아가기","정리 계획을 유지한 채 이어서 작업합니다.")}:page=="jobs"?new[]{("백업","정리 계획 확인에서 백업만 실행하거나 백업 후 이동을 선택하세요."),("중단 · 재개","중단된 기록에서 재개할 수 있습니다. 원본이 바뀌면 새 백업이 필요합니다."),("복원 · 보관","새 위치에 복원하고 게임을 직접 확인하세요. 백업은 자동 삭제하지 않습니다.")}:new[]{("선택","후보를 누르면 폴더 구조를 확인합니다. 둥근 선택 버튼으로 추가할 게임을 고릅니다."),("추가","선택한 게임을 현재 위치 그대로 등록합니다. 별칭·태그·이미지는 나중에 편집할 수 있습니다."),("이동","추가한 게임에서 ‘보관함으로 옮기기’를 누르면 도착 위치와 백업 용량을 확인할 수 있습니다.")};
         foreach(var step in steps){content.Children.Add(new TextBlock {Text=step.Item1,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,24,0,7)});content.Children.Add(Text(step.Item2,13,"#7B8CA4"));}
         if(page!="tags")content.Children.Add(new TextBlock {Text="태그 이름 수정·삭제는 왼쪽 ‘태그’ 탭에서 합니다.",Margin=new Thickness(0,22,0,0),Foreground=B("#8797AF"),TextWrapping=TextWrapping.Wrap});
         layout.Children.Add(content);win.Content=layout;win.ShowDialog();
     }
 }
+

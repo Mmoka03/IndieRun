@@ -1,10 +1,11 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 namespace IndieRun;
 
 public sealed class GamePlay
 {
     public string Id { get; set; }="";
+    public bool Hidden {get;set;}
     public bool Favorite { get; set; }
     public DateTime AddedUtc { get; set; }=DateTime.UtcNow;
     public DateTime? LastPlayedUtc { get; set; }
@@ -34,7 +35,7 @@ public static class PlayerRules
     public static string Title(Package p)=>string.IsNullOrWhiteSpace(p.Alias)?p.Folder:p.Alias;
     public static bool Matches(Package p,GamePlay settings,PlayerView view,IEnumerable<TagDefinition> tags)
     {
-        if(p.Excluded)return false;
+        if(p.Excluded||(view.Group=="hidden"?!settings.Hidden:settings.Hidden))return false;
         var haystack=string.IsNullOrWhiteSpace(p.Alias)||view.IncludeOriginal?Title(p)+" "+p.Folder:Title(p);
         if(!haystack.Contains(view.Query.Trim(),StringComparison.OrdinalIgnoreCase))return false;
         if(view.Group=="favorites"&&!settings.Favorite||view.Group=="recent"&&settings.LastPlayedUtc==null)return false;
@@ -79,17 +80,25 @@ public sealed class PlayerStore(string root)
     public static ProcessStartInfo StartInfo(Package p,GamePlay game)
     {
         Validate(new PlayerDocument {Games=[game]});
-        if(!Directory.Exists(p.Source))throw new IOException("게임 폴더가 없습니다. 보관함에서 위치를 다시 확인하세요.");
-        var marker=LibraryStore.ReadIdentity(p.Source);if(marker!=null&&marker.GameId!=p.Id)throw new IOException("게임 ID가 변경됐습니다. 보관함에서 다시 확인하세요.");
-        if(game.Executable.Length==0)throw new IOException("기본 실행 파일을 먼저 지정하세요.");
+        GameLaunch.RequireFolder(p.Source,LaunchProblem.FolderMissing);
+        var marker=GameLaunch.ReadIdentity(p.Source);if(marker!=null&&marker.GameId!=p.Id)throw new GameLaunchException(LaunchProblem.Identity,GameLaunch.State(LaunchProblem.Identity).Message);
+        if(game.Executable.Length==0)throw new GameLaunchException(LaunchProblem.Setup,GameLaunch.State(LaunchProblem.Setup).Message);
         var executable=BackupPaths.Child(p.Source,game.Executable);BackupPaths.NoLinks(executable);
-        if(!File.Exists(executable))throw new IOException("실행 파일이 없습니다. 편집에서 다시 지정하세요.");
+        if(!p.Includes(executable))throw new GameLaunchException(LaunchProblem.Settings,"별도 게임 또는 제외한 폴더의 실행 파일입니다. 게임 구성을 확인하세요.");
+        GameLaunch.RequireFile(executable);
         var working=game.WorkingDirectory.Length==0?Path.GetDirectoryName(executable)!:game.WorkingDirectory=="."?p.Source:BackupPaths.Child(p.Source,game.WorkingDirectory);
-        BackupPaths.NoLinks(working);if(!Directory.Exists(working))throw new IOException("작업 폴더를 찾을 수 없습니다.");
+        if(!p.Includes(working))throw new GameLaunchException(LaunchProblem.Settings,"작업 폴더가 본편 범위 밖에 있습니다.");
+        GameLaunch.RequireFolder(working,LaunchProblem.WorkingFolderMissing);
         return new ProcessStartInfo(executable){Arguments=game.Arguments,WorkingDirectory=working,UseShellExecute=false};
     }
     public static Process Launch(Package p,GamePlay game)
     {
         var process=Process.Start(StartInfo(p,game))??throw new IOException("게임을 시작하지 못했습니다.");game.LastPlayedUtc=DateTime.UtcNow;return process;
     }
+}
+
+public static class TagBatchRules
+{
+    public static int Present(IEnumerable<Package> games,TagDefinition tag)=>games.Count(p=>(tag.Kind=="genre"?p.Genres:p.Categories).Contains(tag.Name));
+    public static int Affected(IReadOnlyCollection<Package> games,TagDefinition tag,bool add)=>add?games.Count-Present(games,tag):Present(games,tag);
 }

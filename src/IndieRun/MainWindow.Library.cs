@@ -43,14 +43,17 @@ public partial class MainWindow
         catch(Exception ex) when(LibraryFault(ex)){libraryError=ex.Message;}
         if(libraryError.Length>0){SaveStatus.Content="계획 저장됨 · 보관함 확인";SaveStatus.ToolTip=libraryError;}
     }
-    bool RegisterGame(Package p)
+    bool RegisterGame(Package p, bool quiet=false)
     {
         if(snapshot==null||p.Excluded||!Directory.Exists(p.Source))return false;
         try
         {
             var marker=LibraryStore.ReadIdentity(p.Source);
             if(marker!=null&&packages.Any(q=>q!=p&&q.Id==marker.GameId))throw new IOException("이 ID의 기존 등록이 있습니다. 먼저 복사본 또는 폴더 연결을 확인하세요.");
-            var oldId=p.Id;var update=Library().Register(p,catalog.Tags,snapshot);
+            var repair=!quiet&&marker==null&&libraryDocument.Games.Any(g=>g.Id==p.Id&&g.Status=="IdentityMissing"&&g.LastKnownPath.Equals(p.Source,StringComparison.OrdinalIgnoreCase));
+            var oldId=p.Id;var result=GameRegistration.Add(p,catalog.Tags,snapshot,destination,allowLocal:quiet,allowMissingIdentity:repair);
+            if(result.LocalOnly){p.Registered=true;p.LocalRegistration=true;p.ScopeHistory.Clear();history.Clear();return true;}
+            var update=result.Library!;
             var id=LibraryStore.ReadIdentity(p.Source)!.GameId;
             p.Id=id;foreach(var c in checkpoints.Where(c=>c.PackageId==oldId))c.PackageId=id;
             var path=Path.Combine(p.Source,LibraryStore.MarkerName);var stamp=new FileInfo(path);
@@ -63,11 +66,11 @@ public partial class MainWindow
             }
             libraryDocument=update.Document;libraryError=update.CsvError??"";
             identityInventory=LibraryStore.Inspect(snapshot);WorkspaceReconciler.Check(p,baseline,snapshot);IdentityReconciler.Flag(p,identityInventory,libraryDocument);
-            history.Clear();QueueWorkspaceSave();
-            if(update.CsvError!=null)Info("CSV 저장 확인","게임 등록은 저장했습니다. CSV: "+update.CsvError);
+            p.Registered=true;p.LocalRegistration=false;p.ScopeHistory.Clear();history.Clear();QueueWorkspaceSave();
+            if(update.CsvError!=null&&!quiet)ErrorInfo("CSV 저장 확인","게임 등록은 저장했지만 CSV를 갱신하지 못했습니다.",update.CsvError);
             return true;
         }
-        catch(Exception ex) when(LibraryFault(ex)){Info("보관함 등록 확인",ex.Message);return false;}
+        catch(Exception ex) when(LibraryFault(ex)){registrationErrors[p.Id]=ex.Message;if(!quiet)ErrorInfo("게임 추가 확인","게임을 추가하지 못했습니다. 위치와 권한을 확인한 뒤 다시 시도하세요.",ex.Message);return false;}
     }
     async void Library_Click(object sender,RoutedEventArgs e)
     {if(backupBusy||scanning)return;SetPage("library");await RefreshWorkspaceAsync(source,false,false);RenderLibrary();}
@@ -81,8 +84,7 @@ public partial class MainWindow
     {
         LibraryContent.Children.Clear();
         var top=new DockPanel();var refresh=Btn("다시 확인",async()=>{await RefreshWorkspaceAsync(source,false,false);RenderLibrary();});DockPanel.SetDock(refresh,Dock.Right);top.Children.Add(refresh);
-        top.Children.Add(Text("내 보관함",23));LibraryContent.Children.Add(top);
-        LibraryContent.Children.Add(new TextBlock {Text=destination,ToolTip=destination,TextTrimming=TextTrimming.CharacterEllipsis,Foreground=B("#8796AA"),Margin=new Thickness(0,8,0,14)});
+        top.Children.Add(new TextBlock {Text=destination,ToolTip=destination,TextTrimming=TextTrimming.CharacterEllipsis,Foreground=B("#8796AA"),VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,18,0)});top.Margin=new Thickness(0,0,0,18);LibraryContent.Children.Add(top);
         var actions=new WrapPanel {Margin=new Thickness(0,0,0,18)};
         var save=Btn("메타데이터 · CSV 저장",()=>{SaveLibraryMetadata();RenderLibrary();Say(libraryError.Length==0?"보관함 정보와 CSV를 저장했습니다":"보관함 저장 확인 필요");});save.IsEnabled=HasLibraryFile;actions.Children.Add(save);
         actions.Children.Add(Btn("보관함 폴더",()=>OpenSourceFolder(destination)));LibraryContent.Children.Add(actions);
@@ -96,7 +98,7 @@ public partial class MainWindow
             {
                 var row=new DockPanel {Margin=new Thickness(0,10,0,0)};var split=Btn("이 복사본에 새 ID",async()=>
                 {
-                    if(MessageBox.Show(this,"선택한 폴더에 새 ID를 부여하여 별도 게임으로 구분할까요?\n폴더명은 유지됩니다.\n"+path,"복사본 구분",MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)return;
+                    if(!Confirm("복사본 구분","선택한 폴더에 새 ID를 부여해 별도 게임으로 등록합니다. 폴더명은 유지됩니다.","별도 게임으로 등록",path))return;
                     try
                     {
                         LibraryStore.AssignCopyIdentity(path,pair.Key);
@@ -109,7 +111,7 @@ public partial class MainWindow
                         }
                         await RefreshWorkspaceAsync(source,false,false);RenderLibrary();
                     }
-                    catch(Exception ex) when(LibraryFault(ex)){Info("복사본 구분",ex.Message);}
+                    catch(Exception ex) when(LibraryFault(ex)){ErrorInfo("복사본 구분","복사본을 구분하지 못했습니다.",ex.Message);}
                 });DockPanel.SetDock(split,Dock.Right);row.Children.Add(split);row.Children.Add(Text(path,12));box.Children.Add(row);
             }
             LibraryContent.Children.Add(new Border {Child=box,Background=B("#FFF7E9"),CornerRadius=new CornerRadius(8),Padding=new Thickness(16),Margin=new Thickness(0,0,0,16)});
@@ -118,7 +120,7 @@ public partial class MainWindow
         {
             var row=new DockPanel {Margin=new Thickness(0,0,0,14)};var register=Btn("등록",()=>{if(RegisterGame(candidate)){FlushWorkspace();RenderLibrary();}});DockPanel.SetDock(register,Dock.Right);row.Children.Add(register);row.Children.Add(Text("새로 발견 · 미등록 · "+candidate.Folder,14));LibraryContent.Children.Add(row);
         }
-        if(libraryDocument.Games.Count==0)LibraryContent.Children.Add(Text("정리 화면에서 게임을 선택해 ‘보관함 등록’을 누르세요. 이동할 게임은 백업 전에 자동 등록합니다.",13,"#8190A5"));
+        if(libraryDocument.Games.Count==0)LibraryContent.Children.Add(Text("정리 화면에서 게임을 선택해 ‘선택한 게임 추가’을 누르세요. 이동할 게임은 백업 전에 자동 등록합니다.",13,"#8190A5"));
         foreach(var game in libraryDocument.Games.OrderBy(g=>g.Alias.Length>0?g.Alias:g.Folder))
         {
             var box=new StackPanel();box.Children.Add(Text(game.Alias.Length>0?game.Alias:game.Folder,18));
@@ -127,13 +129,14 @@ public partial class MainWindow
             var buttons=new WrapPanel {Margin=new Thickness(0,12,0,0)};
             var p=packages.Find(p=>p.Id==game.Id);var paths=identityInventory.Locations.GetValueOrDefault(game.Id);
             if(p!=null)buttons.Children.Add(Btn("분류 · 별칭 편집",()=>{if(EditGames([p]))RenderLibrary();}));
+            if(p!=null&&game.Status is "Missing" or "Unavailable" or "IdentityMissing")buttons.Children.Add(Btn("폴더 다시 연결",async()=>await ReconnectGameAsync(p)));
             if(paths?.Count==1)
             {
                 buttons.Children.Add(Btn("게임 폴더",()=>OpenSourceFolder(paths[0])));
                 var note=Btn("정보 메모장 남기기",()=>
                 {
                     try{SaveLibraryMetadata();var current=libraryDocument.Games.Find(g=>g.Id==game.Id)??game;LibraryStore.WriteNote(paths[0],current);Say("게임 폴더에 정보 메모장을 저장했습니다 · 다시 검색하면 변경을 확인할 수 있어요");}
-                    catch(Exception ex) when(LibraryFault(ex)){Info("메모장 저장",ex.Message);}
+                    catch(Exception ex) when(LibraryFault(ex)){ErrorInfo("메모장 저장","정보 메모장을 저장하지 못했습니다.",ex.Message);}
                 });note.ToolTip="선택 사항 · 현재 별칭과 분류를 게임 폴더에 저장합니다. 기존 백업 이후의 파일 추가이므로 이전 이동 되돌리기는 변경 확인으로 중단될 수 있습니다.";buttons.Children.Add(note);
             }
             if(game.Status=="IdentityMissing"&&p!=null)buttons.Children.Add(Btn("이 폴더 다시 등록",()=>{if(RegisterGame(p)){FlushWorkspace();RenderLibrary();}}));

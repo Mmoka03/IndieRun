@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Automation;
@@ -14,7 +14,7 @@ public partial class MainWindow
     {
         if(snapshot==null||!selected.IsReal)return;
         var package=selected;
-        var files=snapshot.Files.Where(f=>GameScanner.Within(f.Path,package.Source)&&(ReadOnlyPreview.IsText(f.Path)||ReadOnlyPreview.IsImage(f.Path)))
+        var files=snapshot.Files.Where(f=>(package.Includes(f.Path)||package.RelatedFolders.Any(r=>GameScanner.Within(f.Path,r.Source)))&&(ReadOnlyPreview.IsText(f.Path)||ReadOnlyPreview.IsImage(f.Path)))
             .OrderBy(f=>ReadOnlyPreview.IsText(f.Path)?0:1)
             .ThenBy(f=>Path.GetFileName(f.Path).Contains("readme",StringComparison.OrdinalIgnoreCase)?0:1)
             .ThenBy(f=>Path.GetRelativePath(package.Source,f.Path).Count(c=>c=='\\'))
@@ -33,7 +33,7 @@ public partial class MainWindow
         var list=new ListBox {BorderBrush=B("#E2E8F2"),BorderThickness=new Thickness(1),Background=B("#FAFBFE"),Padding=new Thickness(4)};AutomationProperties.SetName(list,"미리보기 파일");
         foreach(var file in files)
         {
-            var name=Path.GetRelativePath(package.Source,file.Path);
+            var related=package.RelatedFolders.FirstOrDefault(r=>GameScanner.Within(file.Path,r.Source));var name=related==null?Path.GetRelativePath(package.Source,file.Path):related.Name+"/"+Path.GetRelativePath(related.Source,file.Path);
             list.Items.Add(new ListBoxItem {Content=new TextBlock {Text=name,TextTrimming=TextTrimming.CharacterEllipsis,ToolTip=name,FontSize=12},Tag=file.Path,Padding=new Thickness(8,8,8,8)});
         }
         sidebar.Children.Add(list);grid.Children.Add(sidebar);
