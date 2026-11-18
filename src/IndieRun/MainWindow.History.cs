@@ -49,8 +49,8 @@ public partial class MainWindow
         if(historyError.Length>0){var error=new StackPanel();error.Children.Add(WorkText("작업 기록을 확인하지 못했습니다. 원본 기록과 파일은 보존했습니다.",13,"Warning.Text"));error.Children.Add(WorkDetails(historyError));JobsContent.Children.Add(WorkCard(error,"Warning.Surface"));}
         var records=workHistory.Records;var attention=records.Where(r=>r.Attention).ToList();
         foreach(var record in PageItems(attention,"history-attention","",JobsContent,PaintHistory))JobsContent.Children.Add(HistoryCard(record));
-        var done=records.Where(r=>!r.Attention).ToList();
-        if(done.Count>0){var completed=new StackPanel();foreach(var record in PageItems(done,"history-done","",completed,PaintHistory))completed.Children.Add(HistoryCard(record));JobsContent.Children.Add(new Expander{Header=$"완료 기록 · 이동 {done.Count(r=>r.Kind=="Move")}건 · 백업 {done.Count(r=>r.Kind=="Backup")}개",Content=completed,Margin=new Thickness(0,8,0,16)});}
+        var done=records.Where(r=>!r.Attention).GroupBy(r=>(r.Root.ToUpperInvariant(),r.JobId)).OrderByDescending(g=>g.Max(r=>r.UpdatedUtc)).SelectMany(g=>g.OrderBy(r=>r.Kind=="Move"?0:r.Kind=="Backup"?1:2).ThenByDescending(r=>r.UpdatedUtc)).ToList();
+        if(done.Count>0){var completed=new StackPanel();foreach(var record in PageItems(done,"history-done","",completed,PaintHistory))completed.Children.Add(HistoryCard(record));JobsContent.Children.Add(new Expander{Header=$"완료 기록 · 이동 {done.Count(r=>r.Kind=="Move")}건 · 백업 {done.Count(r=>r.Kind=="Backup")}개",Content=completed,IsExpanded=true,Margin=new Thickness(0,8,0,16)});}
         if(records.Count==0&&!HistoryLoading&&historyError.Length==0)JobsContent.Children.Add(WorkText("아직 작업 기록이 없습니다.",13,"Text.Muted"));
         JobsContent.Children.Add(new Expander{Header="다른 위치의 기록",Content=Btn("이전 백업 위치 추가",async()=>{var picker=new OpenFolderDialog{Title="백업 기록이 보관된 상위 폴더 선택"};if(picker.ShowDialog(this)==true)try{await AddHistoryRootAsync(picker.FolderName);}catch(Exception ex)when(LibraryFault(ex)){ErrorInfo("기록 폴더 확인","같은 작업 기록이 있는 폴더인지 확인하세요.",ex.Message);}}),Margin=new Thickness(0,12,0,0)});
         if(BatchRenames().HasPending||File.Exists(BatchRenames().Last))JobsContent.Children.Add(Btn("이름 변경 기록",()=>ShowRenameProgress()));
@@ -84,15 +84,20 @@ public partial class MainWindow
             else if(record.Kind=="Backup"&&record.State is "Deleting" or "DeleteFailed")Action("삭제 다시 시도",()=>ShowBackupManagerFor(record.Root),true);
             else if(record.Kind=="Backup"&&!record.Verified&&!record.BackupRemoved)Action("백업 재개",async()=>await RunHistoryBackupAsync(record,"resume"),true);
             else if(record.Kind=="Restore"&&record.State is "Interrupted" or "Cancelled" or "Failed")Action("복원 재개",async()=>await RunHistoryBackupAsync(record,"restore-resume"),true);
-            else if(record.Kind=="Backup"&&record.Verified&&!record.BackupRemoved)Action("다시 검증",async()=>await RunHistoryBackupAsync(record,"verify"));
+            else if(record.Kind=="Backup"&&CanRestore(record))Action("백업에서 복원",async()=>await RunHistoryBackupAsync(record,"restore"),true);
             else if(record.Kind=="Preparation")Action("정리에서 확인",()=>ReviewHistoryGame(record.GameId));
+        }
+        if(record.Kind=="Move"&&record.Availability=="Connected"&&!record.BackupRemoved)
+        {
+            var backup=workHistory.Records.FirstOrDefault(r=>r.Kind=="Backup"&&r.JobId==record.JobId&&r.Root.Equals(record.Root,StringComparison.OrdinalIgnoreCase)&&CanRestore(r));
+            if(backup!=null)Action("백업에서 복원",async()=>await RunHistoryBackupAsync(backup,"restore"));
         }
         var other=new StackPanel();
         if(record.Availability=="Connected"&&record.State!="RecordError")
         {
             if(record.Kind=="Move"&&!record.BackupRemoved&&record.State is "Completed" or "Interrupted" or "RecoveryRequired")other.Children.Add(Btn("원래 위치로 되돌리기",async()=>{if(Confirm("원래 위치로 되돌리기","게임을 종료한 뒤 진행하세요. 파일 충돌이나 변경이 있으면 중단합니다.","되돌리기"))await RunHistoryMoveAsync(record,true);}));
             if(record.Kind=="Move"&&record.BackupRemoved)other.Children.Add(WorkText("백업이 삭제되어 이 작업을 되돌릴 수 없습니다.",12,"Text.Muted"));
-            if(record.Kind=="Backup"&&record.State=="Completed")other.Children.Add(Btn("백업에서 복원",async()=>await RunHistoryBackupAsync(record,"restore")));
+            if(record.Kind=="Backup"&&CanRestore(record))other.Children.Add(Btn("다시 검증",async()=>await RunHistoryBackupAsync(record,"verify")));
             if(record.Kind=="Move")other.Children.Add(Btn("게임 폴더 열기",()=>OpenSourceFolder(record.State=="Completed"?record.Destination:record.Source)));
             if(record.Kind=="Backup")other.Children.Add(Btn("백업 폴더 열기",()=>OpenSourceFolder(Path.Combine(record.Root,record.JobId))));
             if(record.Kind=="Restore")other.Children.Add(Btn("복원 폴더 열기",()=>OpenSourceFolder(record.Destination)));
@@ -114,8 +119,10 @@ public partial class MainWindow
         try{var move=await Task.Run(()=>new BackupEngine(record.Root).ReadMove(record.JobId,record.OperationId));await RunMoveJob(move,undo);}
         catch(Exception ex)when(LibraryFault(ex)||ex is InvalidOperationException){ReportMoveProblem("이동 기록 확인","원본 기록을 확인하지 못해 파일을 변경하지 않았습니다.",ex.Message);}
     }
+    static bool CanRestore(WorkRecord record)=>record.Availability=="Connected"&&record.State=="Completed"&&record.Verified&&!record.BackupRemoved&&!record.WithoutBackup;
     async Task RunHistoryBackupAsync(WorkRecord record,string action)
     {
+        if(backupBusy||fileOperationPreparing)return;
         var engine=new BackupEngine(record.Root);string? target=null;
         var acknowledge=false;
         if(action.StartsWith("restore",StringComparison.Ordinal))
@@ -123,9 +130,13 @@ public partial class MainWindow
             BackupJob job;
             try{job=await Task.Run(()=>engine.Load(record.JobId));}
             catch(Exception ex)when(LibraryFault(ex)){ErrorInfo("백업 확인","백업 기록을 읽지 못했습니다. 위치와 접근 권한을 확인하세요.",ex.Message);return;}
+            if(job.WithoutBackup||job.Status!="Completed"||!job.SourceVerified){ErrorInfo("백업 확인","복원할 수 있는 완료된 백업이 없습니다.","작업 기록에서 백업 상태를 다시 확인하세요.");return;}
             acknowledge=ConfirmLegacyRestore(job);if(job.LegacyIncomplete&&!acknowledge)return;
+            if(action=="restore")
+            {
+                var dialog=BuildRestorePlan(job,engine.Root,path=>target=path);dialog.ShowDialog();if(target==null)return;
+            }
         }
-        if(action=="restore"){var picker=new OpenFolderDialog{Title="새 복원 폴더를 만들 위치 선택"};if(picker.ShowDialog(this)!=true)return;target=picker.FolderName;}
         await RunFileOperation(action=="verify"?"백업 검증":action.StartsWith("restore")?(acknowledge?"일부 폴더 복원":"복원"):"백업 재개",async(e,p,t)=>{if(action=="resume")await e.ResumeAsync(record.JobId,p,t);else if(action=="verify")await e.VerifyAsync(record.JobId,p,t);else if(action=="restore-resume")await e.ResumeRestoreAsync(record.JobId,record.OperationId,p,t,acknowledge);else await e.RestoreAsync(record.JobId,target!,p,t,acknowledge);},null,record.Title,engine,record.WithoutBackup);
     }
 }

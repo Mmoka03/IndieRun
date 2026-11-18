@@ -43,6 +43,15 @@ public partial class MainWindow
                 foreach(var entry in group.OrderByDescending(i=>i.Job.CreatedUtc))
                 {
                     var job=entry.Job;var panel=new StackPanel();if(job.LegacyIncomplete)panel.Children.Add(WorkText("이전 버전의 일부 폴더 백업 · 제외된 데이터는 복원되지 않습니다.",12,"Warning.Text"));var row=new DockPanel();var pick=Btn(picked.Contains(job.Id)?"선택됨":"선택",()=>{});pick.MinWidth=76;pick.Margin=new Thickness(12,0,0,0);pick.IsEnabled=entry.Selectable&&!backupBusy&&!Pending();DockPanel.SetDock(pick,Dock.Right);row.Children.Add(pick);
+                    if(job.Status=="Completed"&&job.SourceVerified&&!job.WithoutBackup)
+                    {
+                        var restore=Btn("복원",async()=>
+                        {
+                            if(busy||backupBusy||fileOperationPreparing)return;
+                            win.Close();
+                            await RunHistoryBackupAsync(new WorkRecord{Root=service.Root,Kind="Backup",JobId=job.Id,GameId=job.Package.Id,Title=title,State=job.Status,Availability="Connected",Verified=true},"restore");
+                        });restore.Margin=new Thickness(12,0,0,0);restore.IsEnabled=!backupBusy&&!fileOperationPreparing;DockPanel.SetDock(restore,Dock.Right);row.Children.Add(restore);
+                    }
                     var info=new StackPanel{VerticalAlignment=VerticalAlignment.Center,ToolTip="작업 기록 포함 "+FormatBytes(entry.StoredBytes)};info.Children.Add(WorkText(job.CreatedUtc.ToLocalTime().ToString("yyyy.MM.dd  HH:mm")+" · "+FormatBytes(entry.ReclaimableBytes),14,"Text.Primary"));var state=entry.Protection??(job.Status is "Deleting" or "DeleteFailed"?"삭제 중단 · 다시 선택해 삭제하세요.":job.Status!="Completed"?BackupState(job.Status)+" · 미완료 백업":job.ExecutionConfirmedUtc.HasValue?"사용자 확인 완료 · "+job.ExecutionConfirmedUtc.Value.ToLocalTime().ToString("yyyy.MM.dd"):"실행 확인 전");info.Children.Add(WorkText(BackupPurpose(job)+" · "+state,11,entry.Protection!=null||job.Status!="Completed"?"Warning.Text":"Text.Muted"));row.Children.Add(info);panel.Children.Add(row);
                     pick.Click+=(_,_)=>{if(!picked.Add(job.Id))picked.Remove(job.Id);pick.Content=picked.Contains(job.Id)?"선택됨":"선택";pick.Style=(Style)FindResource(picked.Contains(job.Id)?"Primary":typeof(Button));Update();};if(picked.Contains(job.Id))pick.Style=(Style)FindResource("Primary");
                     var details=new StackPanel();details.Children.Add(WorkText("원래 위치: "+job.SourceRoot+"\n백업 용도: "+(job.Reason=="move"?"이동 전":job.Reason=="rename"?"폴더명 변경 전":job.Reason=="manual"?"수동 백업":"기존 백업")+"\n상태: "+BackupState(job.Status),12));if(job.Error!=null)details.Children.Add(WorkDetails(job.Error,"오류 내용"));

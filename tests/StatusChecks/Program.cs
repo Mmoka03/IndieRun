@@ -66,13 +66,13 @@ public static class Program
             try{Wait((Task)Call(w,"RunBackupOperation","이동",action,new List<Package>{p},null)!);}finally{timer.Stop();}
             var status=Get<OperationStatus>(w,"operationStatus");Check(!duplicate&&status.Finished&&status.Failed==1&&status.Stopped,"Duplicate prompt or lost failure");
         });
-        Test("failed-backup-actions-precede-collapsed-completed-history",()=>
+        Test("failed-backup-actions-precede-completed-history",()=>
         {
             var source=Path.Combine(root,"locked-game");Directory.CreateDirectory(source);var file=Path.Combine(source,"Game.exe");File.WriteAllText(file,"fixture");
             var p=new Package {Id=Guid.NewGuid().ToString("N"),Source=source,DetectedRoot=source,SearchRoot=root,Folder="locked-game",Name="locked-game",Alias="실패한 게임",IsReal=true};
             using(var hold=File.Open(file,FileMode.Open,FileAccess.Read,FileShare.None))
             {try{Wait(new BackupEngine(Path.Combine(root,"backups")).CreateAsync(p,[]));throw new Exception("Failure expected");}catch(IOException){}}
-            Call(w,"RenderBackupJobs");Wait((Task)Call(w,"RefreshHistoryAsync")!);var content=Get<StackPanel>(w,"JobsContent");var history=content.Children.OfType<Expander>().Single(e=>e.Header?.ToString()?.StartsWith("완료 기록")==true);Check(!history.IsExpanded,"History hides recovery actions");
+            Call(w,"RenderBackupJobs");Wait((Task)Call(w,"RefreshHistoryAsync")!);var content=Get<StackPanel>(w,"JobsContent");var history=content.Children.OfType<Expander>().Single(e=>e.Header?.ToString()?.StartsWith("완료 기록")==true);Check(history.IsExpanded,"Completed records hide recovery actions");
             var first=content.Children.OfType<Border>().First();Check(Find<TextBlock>(first).Any(t=>t.Text=="실패한 게임")&&Find<Button>(first).Any(b=>b.Content?.ToString()=="백업 재개"),"Recovery actions not first");
         });
         Set(w,"closingWithoutSave",true);w.Close();

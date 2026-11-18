@@ -214,6 +214,12 @@ public sealed partial class BackupEngine
         }
         return list.OrderByDescending(r=>r.CreatedUtc).ToList();
     }
+    public void CheckRestoreLocation(BackupJob job,string parent)
+    {
+        parent=Path.GetFullPath(parent);
+        if(!Directory.Exists(parent))throw new IOException("복원할 위치를 찾을 수 없습니다. 다른 폴더를 선택하세요.");
+        ValidateRestoreTarget(job,new RestoreJob{TargetContainer=Path.Combine(parent,"restore-"+Guid.NewGuid().ToString("N"))});
+    }
     public async Task<RestoreJob> RestoreAsync(string id,string parent,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default,bool acknowledgeIncomplete=false)
     {
         using var operation=Acquire();var job=Load(id);if(job.WithoutBackup)throw new IOException("별도 백업이 없어 백업 복원을 사용할 수 없습니다.");if(job.LegacyIncomplete&&!acknowledgeIncomplete)throw new IOException("이전 버전에서 일부 폴더가 빠진 백업입니다. 누락된 데이터는 복원되지 않습니다. 확인 후 일부 파일 복원을 선택하세요.");parent=Path.GetFullPath(parent);
