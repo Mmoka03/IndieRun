@@ -94,6 +94,8 @@ public partial class MainWindow
         }
         catch(Exception ex) when(ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException){Info("이동 전 확인",ex.Message);return;}
         if(!FlushWorkspace()){Info("계획 저장","정리 계획을 먼저 저장해 주세요.");return;}
+        foreach(var p in list)if(!RegisterGame(p))return;
+        if(!FlushWorkspace())return;
         var captured=JsonSerializer.Deserialize<List<Package>>(JsonSerializer.Serialize(list))!;
         var tags=JsonSerializer.Deserialize<List<TagDefinition>>(JsonSerializer.Serialize(catalog.Tags))!;
         var target=destination;var batchId=Guid.NewGuid().ToString("N");

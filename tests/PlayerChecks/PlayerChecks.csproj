@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+ <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0-windows</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+ <ItemGroup>
+  <Compile Include="../../src/IndieRun/GameScanner.cs" Link="GameScanner.cs"/>
+  <Compile Include="../../src/IndieRun/Package.cs" Link="Package.cs"/>
+  <Compile Include="../../src/IndieRun/TagCatalog.cs" Link="TagCatalog.cs"/>
+  <Compile Include="../../src/IndieRun/BackupModels.cs" Link="BackupModels.cs"/>
+  <Compile Include="../../src/IndieRun/BackupEngine.cs" Link="BackupEngine.cs"/>
+   <Compile Include="../../src/IndieRun/MoveEngine.cs" Link="MoveEngine.cs"/>
+   <Compile Include="../../src/IndieRun/LibraryStore.cs" Link="LibraryStore.cs"/><Compile Include="../../src/IndieRun/IdentityReconciler.cs" Link="IdentityReconciler.cs"/><Compile Include="../../src/IndieRun/WorkspaceStore.cs" Link="WorkspaceStore.cs"/><Compile Include="../../src/IndieRun/WorkspaceReconciler.cs" Link="WorkspaceReconciler.cs"/>
+<Compile Include="../../src/IndieRun/PlayerStore.cs" Link="PlayerStore.cs"/><Compile Include="../../src/IndieRun/EditTransaction.cs" Link="EditTransaction.cs"/></ItemGroup>
+</Project>

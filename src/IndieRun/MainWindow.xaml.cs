@@ -38,7 +38,7 @@ public partial class MainWindow : Window
         InitializeWorkspace();
         selected = new Package();
         Render();
-        ContentRendered += async (_,_) => await StartWorkspaceAsync();
+        ContentRendered += async (_,_) => {await StartWorkspaceAsync();if(IsVisible&&sessionReady)InitializePlayer();};
     }
 
     void LoadSamples()
@@ -180,6 +180,8 @@ public partial class MainWindow : Window
         ReviewButton.IsEnabled = list.Count > 0 && !running;
         if(page=="tags") {PlanCount.Text="정리 일시 중지";PlanHint.Text="현재 계획은 유지됩니다";}
         else if(page=="jobs") {PlanCount.Text="백업 · 복원 기록";PlanHint.Text="백업은 직접 삭제 전까지 보관";}
+        else if(page=="library") {PlanCount.Text="보관함 메타데이터";PlanHint.Text="고유 ID로 연결 · JSON과 CSV로 보관";}
+        else if(page=="play") {PlanCount.Text="내 게임";PlanHint.Text="실행 파일은 처음 한 번 직접 지정합니다";}
         QueueWorkspaceSave();
     }
     void Search_Changed(object sender, TextChangedEventArgs e) { if (selected != null) RenderCandidates(); if(!rendering)QueueWorkspaceSave(); }

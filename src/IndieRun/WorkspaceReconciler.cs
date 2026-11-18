@@ -39,7 +39,7 @@ public static class WorkspaceReconciler
         {
             if(old.Any(p=>GameScanner.Within(group.Key,p.Source)))continue;
             var bytes=scan.Files.Where(f=>GameScanner.Within(f.Path,group.Key)).Sum(f=>f.Length);
-            result.Add(new Package {IsReal=true,Id=Guid.NewGuid().ToString("N"),Source=group.Key,DetectedRoot=group.Key,SearchRoot=scan.Root,Folder=Path.GetFileName(group.Key),Name=Path.GetFileName(group.Key),Gb=bytes/(1024d*1024*1024)});
+            result.Add(new Package {IsReal=true,Id=Guid.NewGuid().ToString("N"),Source=group.Key,DetectedRoot=group.Key,SearchRoot=GameScanner.Within(group.Key,scan.Root)?scan.Root:Path.GetDirectoryName(group.Key)!,Folder=Path.GetFileName(group.Key),Name=Path.GetFileName(group.Key),Gb=bytes/(1024d*1024*1024)});
         }
         return result;
     }

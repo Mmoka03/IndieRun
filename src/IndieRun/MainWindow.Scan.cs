@@ -37,7 +37,7 @@ public partial class MainWindow
     List<ScannedFile> Executables(Package p) => snapshot?.Files.Where(f=>GameScanner.Within(f.Path,p.Source)&&Path.GetExtension(f.Path).Equals(".exe",StringComparison.OrdinalIgnoreCase)).ToList()??[];
     bool CanIncludeParent()
     {
-        if(!selected.IsReal||snapshot==null||selected.ReviewState.Length>0)return false;
+        if(!selected.IsReal||snapshot==null||selected.ReviewState.Length>0||File.Exists(Path.Combine(selected.Source,LibraryStore.MarkerName)))return false;
         var parent=Directory.GetParent(selected.Source)?.FullName;
         return parent!=null&&GameScanner.Within(parent,selected.SearchRoot)&&!parent.Equals(selected.SearchRoot,StringComparison.OrdinalIgnoreCase)
             &&!packages.Any(p=>p!=selected&&GameScanner.Within(p.Source,parent));
@@ -48,6 +48,8 @@ public partial class MainWindow
     void SetScope(string path)
     {
         if(snapshot==null||!selected.IsReal)return;
+        if(!path.Equals(selected.Source,StringComparison.OrdinalIgnoreCase)&&File.Exists(Path.Combine(selected.Source,LibraryStore.MarkerName)))
+        {Info("등록된 범위","등록된 게임은 식별 파일이 있는 폴더를 기준으로 관리합니다. 범위는 등록 전에 정해 주세요.");return;}
         if(selected.ReviewState.Length>0){Info("변경 확인","현재 폴더 상태를 먼저 확인해 주세요.");return;}
         if(!GameScanner.Within(path,selected.SearchRoot)||path.Equals(selected.SearchRoot,StringComparison.OrdinalIgnoreCase)||!GameScanner.Within(selected.DetectedRoot,path))
         {Info("범위 확인","실행 후보를 포함하는 폴더를 선택해 주세요. 검색 시작 폴더 전체는 이동 범위로 지정하지 않습니다.");return;}

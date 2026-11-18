@@ -117,7 +117,7 @@ public partial class MainWindow
     {
         if(backupBusy||scanning)return;
         backupBusy=true;backupCancellation=new CancellationTokenSource();backupLiveText=name+" 준비 중…";backupPercent=0;backupBatchLabel="";
-        SetPage("jobs");SaveStatus.IsEnabled=false;Workbench.IsEnabled=false;OrganizeNav.IsEnabled=TagsNav.IsEnabled=RescanButton.IsEnabled=SourceButton.IsEnabled=false;RenderBackupJobs();
+        SetPage("jobs");PlayerNav.IsEnabled=false;LibraryNav.IsEnabled=false;SaveStatus.IsEnabled=false;Workbench.IsEnabled=false;OrganizeNav.IsEnabled=TagsNav.IsEnabled=RescanButton.IsEnabled=SourceButton.IsEnabled=false;RenderBackupJobs();
         var service=BackupService();var progress=new Progress<BackupProgress>(value=>
         {
             backupPercent=value.Total>0?100d*value.Completed/value.Total:0;
@@ -136,7 +136,7 @@ public partial class MainWindow
         {
             backupBusy=false;backupTask=null;backupCancellation.Dispose();backupCancellation=null;
             SyncMovedPackages();
-            SaveStatus.IsEnabled=true;Workbench.IsEnabled=true;OrganizeNav.IsEnabled=TagsNav.IsEnabled=RescanButton.IsEnabled=SourceButton.IsEnabled=true;RenderBackupJobs();QueueWorkspaceSave();
+            PlayerNav.IsEnabled=true;LibraryNav.IsEnabled=true;SaveStatus.IsEnabled=true;Workbench.IsEnabled=true;OrganizeNav.IsEnabled=TagsNav.IsEnabled=RescanButton.IsEnabled=SourceButton.IsEnabled=true;RenderBackupJobs();QueueWorkspaceSave();
         }
     }
     async void BackupClosing(object? sender,CancelEventArgs e)
