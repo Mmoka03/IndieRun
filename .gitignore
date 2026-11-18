@@ -34,6 +34,8 @@
 **/screens/
 **/test-results/
 **/node_modules/
+**/__pycache__/
+*.py[cod]
 **/.indierun*
 **/workspace*.json
 **/tags.json
