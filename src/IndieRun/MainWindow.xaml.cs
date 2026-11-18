@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -115,11 +115,7 @@ public partial class MainWindow : Window
         Render();Say("이전 편집 상태로 되돌렸습니다");
     }
     async void Reset_Click(object sender, RoutedEventArgs e) { if(scanning){scanCancellation?.Cancel();return;} if (running) return; await ScanAsync(source,true); }
-    void Destination_Click(object sender, RoutedEventArgs e)
-    {
-        var picker = new OpenFolderDialog { Title="보관 위치 미리보기 · 파일을 변경하지 않습니다" };
-        if (picker.ShowDialog(this) == true) { destination=picker.FolderName; DestinationLabel.Text=destination; QueueWorkspaceSave(); Say(destination.Any(c=>c>127) ? "경로에 비ASCII 문자가 있습니다 · 호환성 주의" : "목적지 미리보기를 변경했습니다"); }
-    }
+    void Destination_Click(object sender, RoutedEventArgs e)=>ChangeLibraryLocation();
     async void Source_Click(object sender,RoutedEventArgs e)=>await ManageSearchLocationsAsync();
     void Organize_Click(object sender, RoutedEventArgs e) { SetPage("organize"); Render(); Say("게임을 추가해도 폴더는 이동하지 않습니다."); }
     void Jobs_Click(object sender, RoutedEventArgs e)
@@ -129,7 +125,7 @@ public partial class MainWindow : Window
     void RenderJobs() => RenderBackupJobs();
     Window Modal(string title, double width=740, double height=570)
     {
-        return new Window { Title=title,Owner=this,Width=width,Height=height,MinWidth=560,MinHeight=450,WindowStartupLocation=WindowStartupLocation.CenterOwner,ShowInTaskbar=false,Background=ThemeBrush("Surface.Primary") };
+        var win=new Window { Title=title,Owner=this,Width=width,Height=height,MinWidth=560,MinHeight=450,WindowStartupLocation=WindowStartupLocation.CenterOwner,ShowInTaskbar=false,Background=ThemeBrush("Surface.Primary") };PrepareModal(win);return win;
     }
     void Preview_Click(object sender, RoutedEventArgs e)
     {

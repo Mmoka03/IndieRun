@@ -52,5 +52,5 @@
     </ControlTemplate.Triggers>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
-</ResourceDictionary></Application.Resources>
+<Style x:Key="ContentListItem" TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><Border x:Name="Item" Background="{DynamicResource Surface.Primary}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1" CornerRadius="7" Padding="{TemplateBinding Padding}" Margin="{TemplateBinding Margin}"><ContentPresenter HorizontalAlignment="Stretch"/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Item" Property="Background" Value="{DynamicResource Surface.Secondary}"/></Trigger><Trigger Property="IsSelected" Value="True"><Setter TargetName="Item" Property="Background" Value="{DynamicResource Accent.Surface}"/><Setter TargetName="Item" Property="BorderBrush" Value="{DynamicResource Border.Focus}"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter></Style></ResourceDictionary></Application.Resources>
 </Application>

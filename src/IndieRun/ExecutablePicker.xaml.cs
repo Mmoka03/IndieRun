@@ -13,6 +13,7 @@ namespace IndieRun;
 public partial class ExecutablePicker:Window
 {
     readonly Package package;
+    readonly bool preview;
     readonly Func<string,bool> save;
     readonly CancellationTokenSource cancellation=new();
     readonly Dictionary<string,Image> icons=new(StringComparer.OrdinalIgnoreCase);
@@ -20,11 +21,12 @@ public partial class ExecutablePicker:Window
     public ExecutableCandidate? Selected {get;private set;}
     public bool Confirmed {get;private set;}
     public bool AdvancedRequested {get;private set;}
-    public ExecutablePicker(Window? owner,Package package,Func<string,bool> save)
+    public ExecutablePicker(Window? owner,Package package,Func<string,bool> save,bool preview=false)
     {
-        InitializeComponent();Owner=owner;this.package=package;this.save=save;
+        InitializeComponent();Owner=owner;this.package=package;this.save=save;this.preview=preview;
         if(owner==null)WindowStartupLocation=WindowStartupLocation.CenterScreen;
         MaxHeight=Math.Max(MinHeight,Math.Min(700,SystemParameters.WorkArea.Height-48));
+        if(preview){Title="확인할 게임 실행";LaunchButton.Content="이 파일 실행";AdvancedButton.Visibility=Visibility.Collapsed;PickerHint.Text="확인용으로 실행합니다. 기본 실행 파일은 바꾸지 않습니다.";}
         GameTitle.Text=PlayerRules.Title(package);GameTitle.ToolTip=GameTitle.Text;
         Loaded+=async(_,_)=>await LoadCandidatesAsync();
         Closed+=(_,_)=>{closed=true;cancellation.Cancel();};
@@ -119,7 +121,7 @@ public partial class ExecutablePicker:Window
         {
             ExecutableCandidates.ValidateSelection(package.Source,Path.Combine(package.Source,Selected.RelativePath));
             LaunchButton.IsEnabled=false;
-            if(!save(Selected.RelativePath)){Status.Text="설정을 저장하지 못했습니다. 저장 상태를 확인한 뒤 다시 시도하세요.";return;}
+            if(!save(Selected.RelativePath)){Status.Text=preview?"실행하지 못했습니다. 파일과 권한을 확인하세요.":"설정을 저장하지 못했습니다. 저장 상태를 확인한 뒤 다시 시도하세요.";return;}
             Confirmed=true;Close();
         }
         catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or ArgumentException)

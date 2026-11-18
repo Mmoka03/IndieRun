@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -57,7 +57,7 @@ public partial class MainWindow
             var id=LibraryStore.ReadIdentity(p.Source)!.GameId;
             p.Id=id;foreach(var c in checkpoints.Where(c=>c.PackageId==oldId))c.PackageId=id;
             var path=Path.Combine(p.Source,LibraryStore.MarkerName);var stamp=new FileInfo(path);
-            snapshot.Files.RemoveAll(f=>f.Path.Equals(path,StringComparison.OrdinalIgnoreCase));snapshot.Files.Add(new ScannedFile(path,stamp.Length,stamp.LastWriteTimeUtc));
+            snapshot.InvalidateIndex();snapshot.Files.RemoveAll(f=>f.Path.Equals(path,StringComparison.OrdinalIgnoreCase));snapshot.Files.Add(new ScannedFile(path,stamp.Length,stamp.LastWriteTimeUtc));
             var baseline=checkpoints.Find(c=>c.PackageId==id);
             if(baseline!=null)
             {
@@ -72,8 +72,8 @@ public partial class MainWindow
         }
         catch(Exception ex) when(LibraryFault(ex)){registrationErrors[p.Id]=ex.Message;if(!quiet)ErrorInfo("게임 추가 확인","게임을 추가하지 못했습니다. 위치와 권한을 확인한 뒤 다시 시도하세요.",ex.Message);return false;}
     }
-    async void Library_Click(object sender,RoutedEventArgs e)
-    {if(backupBusy||scanning)return;SetPage("library");await RefreshWorkspaceAsync(source,false,false);RenderLibrary();}
+    void Library_Click(object sender,RoutedEventArgs e)
+    {if(backupBusy||scanning)return;SetPage("library");try{libraryDocument=Library().Load();}catch(Exception ex) when(LibraryFault(ex)){libraryError=ex.Message;}RenderLibrary();}
     void RegisterSelected_Click(object sender,RoutedEventArgs e)
     {
         if(!HasSelection||backupBusy||scanning)return;
@@ -87,7 +87,8 @@ public partial class MainWindow
         top.Children.Add(new TextBlock {Text=destination,ToolTip=destination,TextTrimming=TextTrimming.CharacterEllipsis,Foreground=B("#8796AA"),VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,18,0)});top.Margin=new Thickness(0,0,0,18);LibraryContent.Children.Add(top);
         var actions=new WrapPanel {Margin=new Thickness(0,0,0,18)};
         var save=Btn("메타데이터 · CSV 저장",()=>{SaveLibraryMetadata();RenderLibrary();Say(libraryError.Length==0?"보관함 정보와 CSV를 저장했습니다":"보관함 저장 확인 필요");});save.IsEnabled=HasLibraryFile;actions.Children.Add(save);
-        actions.Children.Add(Btn("보관함 폴더",()=>OpenSourceFolder(destination)));LibraryContent.Children.Add(actions);
+        actions.Children.Add(Btn("폴더 열기",OpenLibraryFolder));actions.Children.Add(Btn("위치 변경",ChangeLibraryLocation));LibraryContent.Children.Add(actions);
+        if(!Directory.Exists(destination))LibraryContent.Children.Add(WorkText("저장된 보관함 위치를 찾을 수 없습니다. ‘위치 변경’에서 폴더를 선택하세요.",13,"Warning.Text"));
         if(libraryError.Length>0)LibraryContent.Children.Add(Text("보관함 확인 필요 · "+libraryError,13,"#A38350"));
         foreach(var change in libraryChanges)LibraryContent.Children.Add(Text("위치 변경 · "+change,12,"#6484AC"));
         foreach(var problem in identityInventory.Problems)LibraryContent.Children.Add(Text("식별 파일 확인 · "+problem.Path+" · "+problem.Message,12,"#A38350"));
@@ -116,12 +117,13 @@ public partial class MainWindow
             }
             LibraryContent.Children.Add(new Border {Child=box,Background=B("#FFF7E9"),CornerRadius=new CornerRadius(8),Padding=new Thickness(16),Margin=new Thickness(0,0,0,16)});
         }
-        foreach(var candidate in packages.Where(p=>!p.Excluded&&GameScanner.Within(p.Source,destination)&&!libraryDocument.Games.Any(g=>g.Id==p.Id)))
+        var registeredIds=libraryDocument.Games.Select(g=>g.Id).ToHashSet();
+        foreach(var candidate in PageItems(packages.Where(p=>!p.Excluded&&GameScanner.Within(p.Source,destination)&&!registeredIds.Contains(p.Id)).ToList(),"library-candidates","",LibraryContent,RenderLibrary))
         {
             var row=new DockPanel {Margin=new Thickness(0,0,0,14)};var register=Btn("등록",()=>{if(RegisterGame(candidate)){FlushWorkspace();RenderLibrary();}});DockPanel.SetDock(register,Dock.Right);row.Children.Add(register);row.Children.Add(Text("새로 발견 · 미등록 · "+candidate.Folder,14));LibraryContent.Children.Add(row);
         }
-        if(libraryDocument.Games.Count==0)LibraryContent.Children.Add(Text("정리 화면에서 게임을 선택해 ‘선택한 게임 추가’을 누르세요. 이동할 게임은 백업 전에 자동 등록합니다.",13,"#8190A5"));
-        foreach(var game in libraryDocument.Games.OrderBy(g=>g.Alias.Length>0?g.Alias:g.Folder))
+        if(libraryDocument.Games.Count==0)LibraryContent.Children.Add(Text("정리 화면에서 게임을 선택해 ‘선택한 게임 추가’를 누르세요. 이동할 게임은 백업 전에 자동 등록합니다.",13,"#8190A5"));
+        foreach(var game in PageItems(libraryDocument.Games.OrderBy(g=>g.Alias.Length>0?g.Alias:g.Folder).ToList(),"library","",LibraryContent,RenderLibrary))
         {
             var box=new StackPanel();box.Children.Add(Text(game.Alias.Length>0?game.Alias:game.Folder,18));
             box.Children.Add(Text(LibraryStatus(game.Status)+" · "+game.Folder,12,"#8190A5"));

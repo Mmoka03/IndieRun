@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 using System.Text.Encodings.Web;
 
@@ -14,6 +14,11 @@ public sealed class BackupFile
 }
 public sealed class BackupJob
 {
+    public string OperationGroupId { get; set; }="";
+    public bool RetainedForRecovery { get; set; }
+    public string Reason { get; set; }="";
+    public DateTime? ExecutionConfirmedUtc { get; set; }
+    public DateTime? DeletedUtc { get; set; }
     public int Version { get; set; } = 1;
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Status { get; set; } = "Preparing";

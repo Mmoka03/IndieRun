@@ -26,6 +26,7 @@ public partial class MainWindow
         var p=packages.Find(p=>p.Id==backup.Package.Id);if(p==null)return;
         if(!p.Source.Equals(move.Source,StringComparison.OrdinalIgnoreCase)&&!p.Source.Equals(move.Destination,StringComparison.OrdinalIgnoreCase))return;
         var done=move.Status=="Completed";var root=done?move.Destination:move.Source;var changedLocation=!p.Source.Equals(root,StringComparison.OrdinalIgnoreCase);
+        if(!changedLocation&&p.CompositionMoveState==move.Id+move.Status)return;
         if(done&&changedLocation&&!searchLocations.Any(l=>GameScanner.Within(root,l.Path)))SearchLocationRules.Add(searchLocations,Path.GetDirectoryName(root)!);
         var executableRoot=Path.GetRelativePath(backup.SourceRoot,backup.Package.DetectedRoot);
         p.ScopeHistory.Clear();p.Source=root;p.SearchRoot=done?Path.GetDirectoryName(root)!:backup.Package.SearchRoot;
@@ -41,7 +42,7 @@ public partial class MainWindow
         p.PortableMetadata=done||backup.Package.PortableMetadata;p.Backup=true;p.Done=done;p.Planned=!done;p.ReviewState="";p.ReviewReason="";
         if(snapshot!=null)
         {
-            snapshot.Files.RemoveAll(f=>backup.Package.Includes(f.Path)||GameScanner.Within(f.Path,move.Destination));
+            snapshot.InvalidateIndex();snapshot.Files.RemoveAll(f=>backup.Package.Includes(f.Path)||GameScanner.Within(f.Path,move.Destination));
             snapshot.Directories.RemoveAll(d=>backup.Package.Includes(d)&&!backup.Package.OmittedFolders.Any(r=>GameScanner.Within(Path.Combine(move.Source,r),d))||GameScanner.Within(d,move.Destination));
             snapshot.Directories.Add(root);snapshot.Directories.AddRange(backup.Directories.Select(d=>Path.Combine(root,d)));
             snapshot.Files.AddRange(backup.Files.Select(f=>new ScannedFile(Path.Combine(root,f.RelativePath),f.Length,new DateTime(f.ModifiedTicks,DateTimeKind.Utc))));
@@ -73,7 +74,7 @@ public partial class MainWindow
             if(move.Status=="Completed")
             {
                 buttons.Children.Add(Btn("이동 폴더",()=>OpenSourceFolder(move.Destination)));
-                buttons.Children.Add(Btn("이동 되돌리기",async()=>
+                if(backups.Find(j=>j.Id==move.BackupId) is {} savedBackup&&!BackupEngine.Removed(savedBackup))buttons.Children.Add(Btn("이동 되돌리기",async()=>
                 {
                     if(!Confirm("이동 되돌리기","게임을 종료한 뒤 진행하세요. 패키지를 원래 위치로 되돌립니다.","원래 위치로 이동",move.Source))return;
                     await RunMoveJob(move,true);
@@ -93,20 +94,27 @@ public partial class MainWindow
             await Dispatcher.InvokeAsync(()=>ApplyMoveToWorkspace(engine.Load(move.BackupId),result));
         },subject:Path.GetFileName(move.Destination));
     }
-    async Task StartMoveBatchAsync(List<Package> list,string? targetRoot=null)
+    Task StartMoveBatchAsync(List<Package> list,string? targetRoot=null)=>ExecuteMoveListAsync(new MoveSelection(list,packages).Items(targetRoot??destination),targetRoot);
+    async Task ExecuteMoveListAsync(List<Package> list,string? targetRoot=null)
     {
-        if(backupBusy||scanning)return;
-        try{list=CompositionPlan.Moving(CompositionPlan.Expand(list,packages),targetRoot??destination);}catch(Exception ex) when(LibraryFault(ex)){ErrorInfo("구성 확인","게임 구성을 다시 확인하세요.",ex.Message);return;}
+        if(backupBusy||scanning||list.Count==0)return;
         if(list.Any(p=>p.ReviewState.Length>0)){Info("원본 확인","변경되었거나 찾을 수 없는 패키지를 먼저 확인해 주세요.");return;}
         var service=BackupService();
         try
         {
             if(service.ListMoves().Any(m=>m.Status is "Interrupted" or "RecoveryRequired" or "Running" or "RecordError"))throw new IOException("작업 탭에서 이전 이동을 먼저 복구하거나 완료해 주세요.");
+            foreach(var content in list.Where(p=>p.IsRelatedContent))if(LibraryStore.ReadIdentity(content.Source) is {} marker&&marker.GameId!=content.Id)throw new IOException("관련 자료의 식별 정보가 다릅니다. 자료 위치를 먼저 확인하세요.");
             CompositionPlan.Preflight(service,list,targetRoot??destination);
         }
         catch(Exception ex) when(ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException){ErrorInfo("이동 전 확인","이동 준비 중 문제가 발생했습니다.",ex.Message);return;}
         if(!FlushWorkspace()){Info("계획 저장","정리 계획을 먼저 저장해 주세요.");return;}
-        foreach(var p in list){if(!RegisterGame(p))return;var live=packages.Find(q=>q.Id==p.Id);if(live!=null){live.Registered=p.Registered;live.LocalRegistration=p.LocalRegistration;}}
+        foreach(var p in list)
+        {
+            if(p.IsRelatedContent&&snapshot!=null&&!snapshot.Directories.Contains(p.Source,StringComparer.OrdinalIgnoreCase))
+            {
+                try{var scan=await Task.Run(()=>GameScanner.Scan(p.Source));if(scan.Issues.Count>0)throw new IOException("자료 폴더를 모두 읽지 못했습니다.");snapshot.InvalidateIndex();snapshot.Files.AddRange(scan.Files);snapshot.Directories.AddRange(scan.Directories);}catch(Exception ex)when(LibraryFault(ex)){ErrorInfo("자료 위치 확인","자료 위치와 접근 권한을 확인하세요.",ex.Message);return;}
+            }
+            if(!RegisterGame(p))return;var live=packages.Find(q=>q.Id==p.Id);if(live!=null){live.Registered=p.Registered;live.LocalRegistration=p.LocalRegistration;}else if(p.IsRelatedContent){packages.Add(Clone(p));if(snapshot!=null)checkpoints.Add(WorkspaceReconciler.Capture(p,snapshot));}}
         if(!FlushWorkspace())return;
         if(playerRoot!=destination)LoadPlayer();
         try{foreach(var p in list)PortableStore.Export(Path.GetDirectoryName(CompositionPlan.Target(p,targetRoot??destination))!,p.Name,p,PlayFor(p),catalog,destination);}
@@ -124,7 +132,7 @@ public partial class MainWindow
                 try
                 {
                     token.ThrowIfCancellationRequested();
-                    var backup=await engine.CreateAsync(p,tags,progress,token);
+                    var backup=await engine.CreateAsync(p,tags,progress,token,reason:"move");
                     await BeginOperationItem(p,"이동 준비 중");
                     var moved=await engine.MoveAsync(backup.Id,CompositionPlan.Target(p,target),batchId,progress,token);completed.Add(moved);
                     await MarkOperationItem(p.Id,"Completed");

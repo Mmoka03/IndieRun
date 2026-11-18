@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -6,6 +6,7 @@ namespace IndieRun;
 
 public sealed partial class BackupEngine
 {
+    public static bool Removed(BackupJob job)=>job.Status is "Deleting" or "DeleteFailed" or "Deleted";
     public string Root { get; }
     internal Action<string>? Checkpoint { get; set; }
     internal Func<long>? AvailableBytesOverride { get; set; }
@@ -108,19 +109,20 @@ public sealed partial class BackupEngine
         }
         return Convert.ToHexString(hash.GetHashAndReset());
     }
-    public async Task<BackupJob> CreateAsync(Package package,IEnumerable<TagDefinition> tags,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default)
+    public async Task<BackupJob> CreateAsync(Package package,IEnumerable<TagDefinition> tags,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default,string reason="manual",string operationGroupId="")
     {
         var source=Path.GetFullPath(package.Source);var leaf=new DirectoryInfo(source).Name;
         if(source.Equals(Path.GetPathRoot(source),StringComparison.OrdinalIgnoreCase)||!BackupPaths.Relative(leaf))throw new IOException("게임 디렉터리를 선택해 주세요.");
         if(GameScanner.Within(Root,source)||GameScanner.Within(source,Root))throw new IOException("원본과 백업 위치는 서로 분리해야 합니다.");
         using var operation=Acquire();
-        var job=new BackupJob {SourceRoot=source,OriginalFolder=leaf,Package=JsonSerializer.Deserialize<Package>(JsonSerializer.Serialize(package))!,Tags=JsonSerializer.Deserialize<List<TagDefinition>>(JsonSerializer.Serialize(tags))!};
+        var job=new BackupJob {OperationGroupId=operationGroupId,RetainedForRecovery=operationGroupId.Length>0,Reason=reason,SourceRoot=source,OriginalFolder=leaf,Package=JsonSerializer.Deserialize<Package>(JsonSerializer.Serialize(package))!,Tags=JsonSerializer.Deserialize<List<TagDefinition>>(JsonSerializer.Serialize(tags))!};
         Save(job);Log(job.Id,"Preparing");
         return await RunBackup(job,progress,cancellation);
     }
     public async Task<BackupJob> ResumeAsync(string id,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default)
     {
         using var operation=Acquire();var job=Load(id);
+        if(Removed(job))throw new IOException("삭제한 백업은 재개할 수 없습니다.");
         if(job.Status=="Completed"||job.SourceVerified)throw new IOException("완료된 백업은 재개 대신 검증해 주세요.");
         if(GameScanner.Within(Root,job.SourceRoot)||GameScanner.Within(job.SourceRoot,Root))throw new IOException("원본과 백업 위치가 겹칩니다.");
         return await RunBackup(job,progress,cancellation);
@@ -179,6 +181,7 @@ public sealed partial class BackupEngine
     public async Task<BackupJob> VerifyAsync(string id,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default)
     {
         using var operation=Acquire();var job=Load(id);
+        if(Removed(job))throw new IOException("삭제한 백업은 검증할 수 없습니다.");
         if(!job.SourceVerified)throw new IOException("중단된 백업은 재개하여 원본 검증을 마쳐 주세요.");
         try{State(job,"Verifying");await VerifyPayload(job,Payload(job),progress,cancellation);State(job,"Completed");return job;}
         catch(OperationCanceledException ex){Failure(job,ex,"Cancelled");throw;}
@@ -271,3 +274,4 @@ public sealed partial class BackupEngine
         {try{SaveRestore(restore,"Failed",ex.Message);}catch(Exception logError) when(logError is IOException or UnauthorizedAccessException){}throw;}
     }
 }
+

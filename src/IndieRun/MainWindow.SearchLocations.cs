@@ -14,9 +14,10 @@ public partial class MainWindow
         ScanSourceLabel.Text=searchLocations.Count==0?"등록된 위치 없음":$"위치 {searchLocations.Count}개 · 검색 {searchLocations.Count(l=>l.Enabled)}개";
         ScanSourceLabel.ToolTip=string.Join('\n',searchLocations.Select(l=>(l.Enabled?"검색 켜짐 · ":"검색 꺼짐 · ")+l.Path));
     }
-    async Task ManageSearchLocationsAsync()
+    Task ManageSearchLocationsAsync()
     {
-        if(backupBusy||scanning)return;
+        if(RenamePending){Info("이름 변경 복구","진행 중인 이름 변경을 먼저 완료하거나 되돌리세요.");return Task.CompletedTask;}
+        if(backupBusy||scanning)return Task.CompletedTask;
         var draft=Clone(searchLocations);var win=Modal("탐색 위치",820,600);var layout=new DockPanel {Margin=new Thickness(28)};
         var heading=new DockPanel {Margin=new Thickness(0,0,0,20)};
         var rows=new StackPanel();var message=WorkText("",12,"Warning.Text");
@@ -39,7 +40,7 @@ public partial class MainWindow
         footer.Children.Add(WorkText("검색을 끄거나 등록을 해제해도 게임과 분류 정보는 유지됩니다.",12,"Text.Muted"));
         var actions=new WrapPanel {HorizontalAlignment=HorizontalAlignment.Right,Margin=new Thickness(0,14,0,0)};
         var cancel=Btn("취소",()=>win.Close());cancel.IsCancel=true;actions.Children.Add(cancel);
-        actions.Children.Add(Btn("저장 후 검색",()=>
+        actions.Children.Add(Btn("저장",()=>
         {
             if(!FlushWorkspace()){message.Text="현재 작업을 저장하지 못했습니다. 저장 상태를 확인하세요.";return;}
             var old=searchLocations;var oldSource=source;searchLocations=Clone(draft);source=searchLocations.FirstOrDefault(l=>l.Enabled)?.Path??searchLocations.FirstOrDefault()?.Path??projectRoot;
@@ -62,6 +63,7 @@ public partial class MainWindow
             }
         }
         RenderLocations();layout.Children.Add(new ScrollViewer {Content=rows});win.Content=layout;win.ShowDialog();
-        if(applied){UpdateSearchLocationLabel();await RefreshWorkspaceAsync(source,false,false);}
+        if(applied){UpdateSearchLocationLabel();Say("탐색 위치를 저장했습니다. ‘다시 검색’을 누르면 검색합니다.");}
+        return Task.CompletedTask;
     }
 }

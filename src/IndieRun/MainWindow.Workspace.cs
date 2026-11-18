@@ -35,13 +35,15 @@ public partial class MainWindow
         try{workspaceLock=workspaceStore.AcquireLock();}
         catch(IOException){Info("이미 실행 중","같은 보관 데이터의 프로그램이 이미 실행 중입니다.");closingWithoutSave=true;Close();return;}
         catch(UnauthorizedAccessException){workspaceBlocked=true;SaveStatus.Content="저장 권한 확인";}
-        try{ScopeChanges().Recover();if(Edits().Recover())LoadTags();}catch(Exception ex) when(LibraryFault(ex)){workspaceBlocked=true;ErrorInfo("편집 저장 복구","이전 편집 내용을 복구하지 못했습니다.",ex.Message);}
-        var loaded=workspaceStore.Load();
+        try{if(BatchRenames().HasPending){await Task.Run(()=>BatchRenames().ResolveActive());workspaceBlocked=true;}else Renames().Recover();ScopeChanges().Recover();if(Edits().Recover())LoadTags();}catch(Exception ex) when(LibraryFault(ex)){workspaceBlocked=true;ErrorInfo("편집 저장 복구","이전 편집 내용을 복구하지 못했습니다.",ex.Message);}
+        var loaded=await Task.Run(()=>workspaceStore.Load());
         if(loaded.Document!=null)
         {
-            lastSavedSignature=loaded.Recovered?null:StateSignature(loaded.Document);
+            lastSavedSignature=loaded.Recovered?null:await Task.Run(()=>StateSignature(loaded.Document));
             ApplyWorkspace(loaded.Document);ResolveTagBindings(loaded.Document);SyncMovedPackages();
-            await RefreshWorkspaceAsync(source,false,true);
+            try{libraryDocument=await Task.Run(()=>Library().Load());}catch(Exception ex) when(LibraryFault(ex)){libraryError=ex.Message;}
+            foreach(var p in packages.Where(p=>!p.Excluded&&p.ReviewState.Length==0)){p.ReviewState="cached";p.ReviewReason="저장된 목록입니다. 폴더 작업 전에 다시 검색하세요.";}
+            snapshot=null;sessionReady=true;Render();saveTimer.Stop();Say("저장된 목록을 열었습니다. 탐색 위치를 바꾸거나 다시 검색할 수 있습니다.");
             await RecoverBackupsAsync();
             if(loaded.Recovered)Say("직전 정상 저장본에서 계획을 복원했습니다");
             return;
@@ -86,13 +88,13 @@ public partial class MainWindow
     }
     void QueueWorkspaceSave()
     {
-        if(File.Exists(Edits().Pending)||ScopeChanges().HasPending){SaveStatus.Content="편집 저장 복구 필요";return;}
+        if(File.Exists(Edits().Pending)||(ScopeChanges().HasPending||RenamePending)){SaveStatus.Content="편집 저장 복구 필요";return;}
         if(!sessionReady||scanning||workspaceBlocked||workspaceLock==null)return;
         SaveStatus.Content="저장 중…";saveTimer.Stop();saveTimer.Start();
     }
     bool FlushWorkspace()
     {
-        if(File.Exists(Edits().Pending)||ScopeChanges().HasPending){SaveStatus.Content="편집 저장 복구 필요";return false;}
+        if(File.Exists(Edits().Pending)||(ScopeChanges().HasPending||RenamePending)){SaveStatus.Content="편집 저장 복구 필요";return false;}
         if(!sessionReady)return true;
         if(workspaceBlocked||workspaceLock==null)return false;
         try
@@ -117,7 +119,8 @@ public partial class MainWindow
     }
     async Task<ScanSnapshot> ReadWorkspaceFolders(string root,IEnumerable<Package> previous,CancellationToken token)
     {
-        var merged=new ScanSnapshot {Root=root};
+        var merged=new ScanSnapshot {Root=root};var budget=new ScanBudget();
+        var progress=new Progress<int>(count=>{if(scanning)Say($"폴더 확인 중 · 항목 {count:N0}개 · 중지할 수 있습니다.");});
         var exclusions=new[]{AppContext.BaseDirectory,Path.Combine(projectRoot,"backups"),backupStorageRoot,Path.Combine(projectRoot,"src")}.Concat(previous.Where(p=>p.Excluded).Select(p=>p.Source)).Concat(BackupService().MoveWorkingPaths()).ToArray();
         var enabled=searchLocations.Where(l=>l.Enabled).Select(l=>l.Path).ToList();
         var disabled=searchLocations.Where(l=>!l.Enabled).Select(l=>l.Path).ToList();
@@ -132,9 +135,10 @@ public partial class MainWindow
             try
             {
                 if(!Directory.Exists(scanRoot)){merged.OfflineRoots.Add(scanRoot);merged.UnreadablePaths.Add(scanRoot);merged.Issues.Add("연결 안 됨: "+scanRoot);continue;}
-                var part=await Task.Run(()=>GameScanner.Scan(scanRoot,exclusions,token),token);
+                var part=await Task.Run(()=>GameScanner.Scan(scanRoot,exclusions,token,progress,budget),token);
                 merged.Directories.AddRange(part.Directories);merged.Files.AddRange(part.Files);merged.Issues.AddRange(part.Issues);merged.UnreadablePaths.AddRange(part.UnreadablePaths);
             }
+            catch(ScanLimitException){throw;}
             catch(Exception ex) when(ex is IOException or UnauthorizedAccessException)
             {merged.UnreadablePaths.Add(scanRoot);merged.Issues.Add($"검색 불가: {scanRoot} ({ex.Message})");}
         }
@@ -154,36 +158,32 @@ public partial class MainWindow
             
             // A failed new search must not discard a valid existing plan.
             if(replace&&searchLocations.Any(l=>l.Enabled)&&!result.SearchRoots.Any(r=>result.Directories.Contains(r,StringComparer.OrdinalIgnoreCase)))throw new IOException("새 검색 위치를 읽지 못했습니다.");
+            Say("게임 후보를 정리하고 있습니다… 중지할 수 있습니다.");
+            var prepared=await Task.Run(()=>ScanPreparation.Build(result,replace?[]:Clone(packages),replace?[]:Clone(checkpoints),Clone(catalog.Tags),destination,token),token);
+            token.ThrowIfCancellationRequested();
             if(replace)
             {
                 if(sessionReady&&!workspaceBlocked){if(!FlushWorkspace())throw new IOException("기존 계획을 저장하지 못했습니다.");workspaceStore.Archive();}
                 packages=[];checkpoints=[];selected=new Package();source=Path.GetFullPath(root);Search.Text="";
             }
-            snapshot=result;InspectLibrary(result,packages);
-            foreach(var p in packages)WorkspaceReconciler.Check(p,checkpoints.Find(c=>c.PackageId==p.Id),result);
-            var additions=WorkspaceReconciler.Discover(result,packages);
-            foreach(var p in additions)
-            {
-                IdentityReconciler.ExpandCandidate(p,identityInventory,destination);
-                if(packages.Any(q=>GameScanner.Within(p.DetectedRoot,q.Source)))continue;
-                p.Size=FormatBytes(result.Files.Where(f=>GameScanner.Within(f.Path,p.Source)).Sum(f=>f.Length));p.Color=packageColors[packages.Count%packageColors.Length];
-                packages.Add(p);checkpoints.Add(WorkspaceReconciler.Capture(p,result));WorkspaceReconciler.Check(p,checkpoints.Last(),result);
-            }
+            var selectedId=selected.Id;
+            snapshot=result;packages=prepared.Packages;checkpoints=prepared.Checkpoints;selected=packages.Find(p=>p.Id==selectedId)??new Package();libraryDocument=prepared.Library;identityInventory=prepared.Inventory;catalog.Tags=prepared.Tags;libraryError="";libraryChanges.Clear();
             ImportPortableGames(knownIds,result);
-            foreach(var owner in packages)foreach(var r in owner.RelatedFolders){var linked=packages.Find(p=>p.Id==r.Id);if(linked!=null)r.Source=linked.Source;}
+            ContentLinks.Normalize(packages);
             foreach(var p in packages)IdentityReconciler.Flag(p,identityInventory,libraryDocument);
             if(!HasSelection)selected=packages.FirstOrDefault(p=>!p.Excluded)??new Package();
             history.Clear();sessionReady=true;
             DestinationLabel.Text=destination;UpdateSearchLocationLabel();
-            var changed=packages.Count(p=>!p.Excluded&&p.ReviewState.Length>0);
-            Say(restoring?$"이전 작업 복원 · 확인 필요 {changed}개":$"후보 {packages.Count(p=>!p.Excluded)}개 · 확인 필요 {changed}개");Notice.ToolTip=string.Join('\n',result.Issues.Take(20));
+            var changed=packages.Count(p=>!p.Excluded&&!p.IsRelatedContent&&p.ReviewState.Length>0);
+            Say((restoring?"이전 작업을 불러왔습니다":$"후보 {packages.Count(p=>!p.Excluded&&!p.IsRelatedContent)}개")+(changed>0?$" · 폴더 확인 {changed}개":""));Notice.ToolTip=string.Join('\n',result.Issues.Take(20));
         }
-        catch(OperationCanceledException){Say("검색을 중지했습니다");}
+        catch(OperationCanceledException){Say("검색을 중지했습니다. 기존 목록은 유지됩니다.");}
+        catch(ScanLimitException){Say("메모리 여유가 부족해 중지했습니다. ‘탐색 위치’를 나눠서 검색해 주세요.");}
         catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or ArgumentException){Say("폴더를 확인하지 못했습니다 · 기존 계획은 유지됩니다");Notice.ToolTip=ex.Message;}
         finally
         {
             scanning=false;SourceButton.IsEnabled=true;TagsNav.IsEnabled=true;RescanButton.Content="다시 검색";scanCancellation.Dispose();scanCancellation=null;
-            Render();if(page=="play"&&playerCards!=null){LoadPlayer();RenderPlayer();}if(workspaceBlocked)SaveStatus.Content="저장 파일 확인 필요";else if(sessionReady)FlushWorkspace();else SaveStatus.Content="자동 저장";
+            Render();if(page=="play"&&playerCards!=null){LoadPlayer();RenderPlayer();}if(workspaceBlocked)SaveStatus.Content="저장 파일 확인 필요";else if(sessionReady&&snapshot!=null)FlushWorkspace();else SaveStatus.Content="자동 저장";
         }
     }
     void RefreshReviewDisplay()

@@ -34,7 +34,7 @@ public static class CompositionPlan
             result.Remove(owned);
         }
         foreach(var detached in old.RelatedFolders.Where(r=>!draft.RelatedFolders.Any(n=>n.Id==r.Id)))
-        {var item=result.Find(p=>p.Id==detached.Id);if(item!=null){item.ContentOwnerId="";item.CompositionParentId="";}}
+        {var item=result.Find(p=>p.Id==detached.Id);if(item!=null){item.IsContent=true;item.ContentOwnerId="";item.CompositionParentId="";}}
         result[result.FindIndex(p=>p.Id==draft.Id)]=Copy(draft);
         foreach(var part in draft.Contents.Where(c=>c.Role is "game" or "exclude"))
         {
@@ -49,19 +49,19 @@ public static class CompositionPlan
         {
             BackupPaths.NoLinks(related.Source);if(!Directory.Exists(related.Source)||GameScanner.Within(related.Source,draft.Source)||GameScanner.Within(draft.Source,related.Source))throw new IOException("게임 밖의 별도 자료 폴더를 선택하세요.");
             var existing=result.Find(p=>p.Id==related.Id||p.Source.Equals(related.Source,StringComparison.OrdinalIgnoreCase));
-            if(existing!=null&&(existing.ContentOwnerId.Length>0&&existing.ContentOwnerId!=draft.Id||existing.RelatedFolders.Count>0||existing.Contents.Count>0))throw new IOException("다른 구성에 연결된 폴더입니다. 기존 연결을 먼저 확인하세요.");
-            if(existing!=null&&existing.ContentOwnerId!=draft.Id&&GameRegistration.IsAdded(existing))throw new IOException("이미 추가한 게임은 관련 콘텐츠로 바꾸지 않습니다.");
+            if(existing!=null&&(existing.RelatedFolders.Count>0||existing.Contents.Count>0))throw new IOException("다른 구성에 연결된 폴더입니다. 기존 연결을 먼저 확인하세요.");
+            if(existing!=null&&!existing.IsRelatedContent&&GameRegistration.IsAdded(existing))throw new IOException("이미 추가한 게임은 관련 콘텐츠로 바꾸지 않습니다.");
             if(result.Any(p=>p.Id!=draft.Id&&p!=existing&&(p.Includes(related.Source)||GameScanner.Within(p.Source,related.Source))))throw new IOException("다른 게임이나 관련 콘텐츠와 범위가 겹칩니다.");
             var marker=LibraryStore.ReadIdentity(related.Source);if(marker!=null&&marker.GameId!=existing?.Id)throw new IOException("기존 식별 정보가 있는 폴더입니다. 먼저 등록 상태를 확인하세요.");
             if(existing==null){existing=New(related.Source,draft,related.Id,scan);result.Add(existing);}else{related.Id=existing.Id;result.Find(p=>p.Id==draft.Id)!.RelatedFolders.Find(r=>r.Source==related.Source)!.Id=existing.Id;}
-            existing.ContentOwnerId=draft.Id;existing.CompositionParentId=draft.Id;existing.Excluded=false;
+            existing.IsContent=true;existing.ContentOwnerId=draft.Id;existing.CompositionParentId=draft.Id;existing.Excluded=false;
         }
         foreach(var item in result.Where(p=>p.Id==draft.Id||p.CompositionParentId==draft.Id))
         {
             if(!scan.Directories.Contains(item.Source,StringComparer.OrdinalIgnoreCase))continue;
             var bytes=scan.Files.Where(f=>item.Includes(f.Path)).Sum(f=>f.Length);item.Gb=bytes/(1024d*1024*1024);item.Size=bytes>=1024L*1024*1024?$"{item.Gb:0.##} GB":bytes>=1024*1024?$"{bytes/(1024d*1024):0.##} MB":bytes>=1024?$"{bytes/1024d:0.#} KB":$"{bytes} B";
         }
-        return result;
+        ContentLinks.Normalize(result);return result;
     }
     static Package New(string path,Package parent,string id,ScanSnapshot scan)
     {
@@ -82,10 +82,11 @@ public static class CompositionPlan
         while(queue.TryDequeue(out var id))
         {
             if(!visited.Add(id))continue;var p=result[id];
-            foreach(var part in p.Contents.Where(c=>c.Role=="game"))Add(part.Id);
-            if(p.RelatedFolders.Any(r=>r.Together)&&p.PlannedContainer.Length==0)p.PlannedContainer=p.Name+"_bundle";
+
+            if(p.RelatedFolders.Any(r=>r.Together&&ContentLinks.Owners(source.Values,r.Id).Count<=1)&&p.PlannedContainer.Length==0)p.PlannedContainer=p.Name+"_bundle";
             foreach(var related in p.RelatedFolders)
             {
+                if(ContentLinks.Owners(source.Values,related.Id).Count>1||!Directory.Exists(related.Source))continue;
                 var child=Add(related.Id);if(!chosen.ContainsKey(child.Id))child.Name=related.Name;
                 child.PlannedContainer=related.Together?p.PlannedContainer:"";
             }

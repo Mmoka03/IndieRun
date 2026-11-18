@@ -12,7 +12,7 @@ public partial class MainWindow
     void OrganizeOptions_Click(object sender,RoutedEventArgs e)
     {
         if(!HasSelection||running||scanning||backupBusy||scopeDraft!=null)return;
-        var menu=new ContextMenu();var edit=new MenuItem {Header="구성 수정",IsEnabled=selected.ReviewState.Length==0&&!workspaceBlocked};edit.Click+=(_,_)=>EditComposition(selected);menu.Items.Add(edit);menu.PlacementTarget=(Button)sender;menu.IsOpen=true;
+        var menu=new ContextMenu();var edit=new MenuItem {Header="구성 수정",IsEnabled=selected.ReviewState.Length==0&&!workspaceBlocked};edit.Click+=(_,_)=>EditComposition(selected);menu.Items.Add(edit);if(HasResources(selected)){var resources=new MenuItem{Header="관련 자료"};resources.Click+=(_,_)=>ShowResources(selected);menu.Items.Add(resources);}var rename=new MenuItem{Header="폴더명 변경"};rename.Click+=(_,_)=>RenameFolder(selected);menu.Items.Add(rename);var remove=new MenuItem{Header="목록에서 제거"};remove.Click+=(_,_)=>RemoveGame(selected);menu.Items.Add(remove);menu.PlacementTarget=(Button)sender;menu.IsOpen=true;
     }
     ScanSnapshot? compositionSnapshot;
     async void EditComposition(Package original)
@@ -56,7 +56,7 @@ public partial class MainWindow
         {
             updating=true;chosen=path;external=related;folderTitle.Text=Path.GetFileName(path);folderTitle.ToolTip=path;folderPath.Text=path;folderPath.ToolTip=path;rolePanel.Children.Clear();note.Text="";
             advanced.Visibility=detach.Visibility=related!=null?Visibility.Visible:Visibility.Collapsed;together.IsChecked=related?.Together==true;
-            if(related!=null){rolePanel.Children.Add(OrganizeChip("관련 콘텐츠","Composition.Related"));note.Text="별도 폴더로 유지하며 본편과 함께 이동합니다.";}
+            if(related!=null){rolePanel.Children.Add(OrganizeChip("관련 콘텐츠","Composition.Related"));note.Text=ContentLinks.Owners(packages,related.Id).Count>1?"공유 자료 · 기본 이동 대상에서 제외됩니다.":"별도 폴더로 유지하며 본편과 연결합니다.";}
             else
             {
                 var active=CompositionPlan.Role(draft,path);
@@ -103,7 +103,7 @@ public partial class MainWindow
             try
             {
                 var extra=await Task.Run(()=>GameScanner.Scan(path));if(extra.Issues.Count>0)throw new IOException("자료 폴더를 모두 읽지 못했습니다. 접근 권한을 확인하세요.");
-                scan.Files.RemoveAll(f=>GameScanner.Within(f.Path,path));scan.Files.AddRange(extra.Files);scan.Directories.AddRange(extra.Directories.Where(d=>!scan.Directories.Contains(d,StringComparer.OrdinalIgnoreCase)));
+                scan.InvalidateIndex();scan.Files.RemoveAll(f=>GameScanner.Within(f.Path,path));scan.Files.AddRange(extra.Files);scan.Directories.AddRange(extra.Directories.Where(d=>!scan.Directories.Contains(d,StringComparer.OrdinalIgnoreCase)));
                 var related=new RelatedFolder{Source=path,Name=Path.GetFileName(path)};draft.RelatedFolders.Add(related);
                 // Validate before adding a visible connection; cancel still has no persistent effects.
                 try{CompositionPlan.Apply(draft,packages,scan);}catch{draft.RelatedFolders.Remove(related);throw;}

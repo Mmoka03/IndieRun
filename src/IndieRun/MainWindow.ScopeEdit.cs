@@ -21,7 +21,7 @@ public partial class MainWindow
     void EditScope_Click(object sender,RoutedEventArgs e)
     {
         if(selected.Contents.Count>0||selected.RelatedFolders.Count>0){Info("구성 수정","구성 수정에서 폴더 지정을 먼저 해제하세요.");return;}
-        if(!HasSelection||!IsAdded(selected)||scanning||running||backupBusy||workspaceBlocked||ScopeChanges().HasPending)return;
+        if(!HasSelection||!IsAdded(selected)||scanning||running||backupBusy||workspaceBlocked||(ScopeChanges().HasPending||RenamePending))return;
         scopeDraft=Clone(selected);scopeDraftHistory.Clear();Render();Say("포함할 폴더를 확인한 뒤 범위를 적용하세요.");
     }
     void DraftScope(string path,bool remember=true)
@@ -47,9 +47,9 @@ public partial class MainWindow
             await Task.Run(()=>{var record=service.Prepare(plan,tags,play,library,id,path);service.Commit(record);});
             applied=true;scopeDraft=null;scopeDraftHistory.Clear();ApplyWorkspace(workspaceStore.Load().Document!);LoadPlayer();lastSavedSignature=null;history.Clear();Say("범위를 변경했습니다 · 게임 파일은 이동하지 않았습니다.");
         }
-        catch(Exception ex) when(LibraryFault(ex)){if(ScopeChanges().HasPending)workspaceBlocked=true;ErrorInfo("범위 적용 확인","변경을 완료하지 못했습니다. 원본 게임 파일은 유지됩니다. 남은 기록이 있으면 복구하세요.",ex.Message);}
+        catch(Exception ex) when(LibraryFault(ex)){if((ScopeChanges().HasPending||RenamePending))workspaceBlocked=true;ErrorInfo("범위 적용 확인","변경을 완료하지 못했습니다. 원본 게임 파일은 유지됩니다. 남은 기록이 있으면 복구하세요.",ex.Message);}
         finally{running=false;Workbench.IsEnabled=true;FooterActions.IsEnabled=true;foreach(var b in new[]{PlayerNav,OrganizeNav,TagsNav,LibraryNav,JobsNav,RescanButton})b.IsEnabled=true;}
-        if(applied&&!ScopeChanges().HasPending){await RefreshWorkspaceAsync(source,false,false);Say("범위를 변경했습니다 · 게임 파일은 이동하지 않았습니다.");}else Render();
+        if(applied&&!(ScopeChanges().HasPending||RenamePending)){await RefreshWorkspaceAsync(source,false,false);Say("범위를 변경했습니다 · 게임 파일은 이동하지 않았습니다.");}else Render();
     }
     async void RecoverScope_Click(object sender,RoutedEventArgs e)
     {
@@ -71,6 +71,6 @@ public partial class MainWindow
         ExecutableScopeButton.Visibility=editing&&scopeDraftHistory.Count==0&&ScopeView.Source!=ExecutableScopeRoot?Visibility.Visible:Visibility.Collapsed;
         CancelScopeButton.Visibility=ApplyScopeButton.Visibility=editing?Visibility.Visible:Visibility.Collapsed;ApplyScopeButton.IsEnabled=ScopeDirty;
         RecoverScopeButton.Visibility=ScopeChanges().HasPending?Visibility.Visible:Visibility.Collapsed;
-        if(ScopeChanges().HasPending)ShowOrganizeWarning("이전 범위 변경을 먼저 복구하세요.");
+        if((ScopeChanges().HasPending||RenamePending))ShowOrganizeWarning("이전 범위 변경을 먼저 복구하세요.");
     }
 }

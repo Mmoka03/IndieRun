@@ -14,16 +14,17 @@ public partial class MainWindow
     readonly HashSet<string> organizeSelection=[];
     readonly Dictionary<string,string> registrationErrors=[];
     bool identityNoticeAccepted;
+    int recentlyAdded;
     bool IsAdded(Package p)=>GameRegistration.IsAdded(p)||libraryDocument.Games.Any(g=>g.Id==p.Id);
     bool NeedsCandidateReview(Package p)=>p.ReviewState.Length>0||registrationErrors.ContainsKey(p.Id)||!IsAdded(p)&&!Executables(p).Any(f=>!ExecutableCandidates.IsAuxiliary(f.Path));
-    bool CanPick(Package p)=>p.IsReal&&!p.Excluded&&p.ContentOwnerId.Length==0&&p.ReviewState.Length==0&&(IsAdded(p)||Executables(p).Any(f=>!ExecutableCandidates.IsAuxiliary(f.Path)));
+    bool CanPick(Package p)=>p.IsReal&&!p.Excluded&&!p.IsRelatedContent&&p.ReviewState.Length==0&&(IsAdded(p)||Executables(p).Any(f=>!ExecutableCandidates.IsAuxiliary(f.Path)));
     static TextBlock OrganizeLabel(string text,double size=13,string color="Text.Primary")=>new(){Text=text,FontSize=size,Foreground=ThemeBrush(color),VerticalAlignment=VerticalAlignment.Center,TextTrimming=TextTrimming.CharacterEllipsis};
     static Border OrganizeChip(string text,string role="Accent")=>new(){Child=OrganizeLabel(text,11,role+".Text"),Background=ThemeBrush(role+".Surface"),CornerRadius=new CornerRadius(4),Padding=new Thickness(8,4,8,4),VerticalAlignment=VerticalAlignment.Center};
     void RenderOrganize()
     {
         RenderCandidates();
         SelectedTitle.Text=HasSelection?PlayerRules.Title(selected):"검색할 폴더를 선택하세요";SelectedTitle.ToolTip=SelectedTitle.Text;
-        OriginalPath.Text=selected.Source;OriginalPath.ToolTip=selected.Source;PackageLabel.Text="폴더 구조";
+        OriginalPath.Text=HasSelection?"위치 · "+Path.GetFileName(Path.GetDirectoryName(selected.Source))+" / "+Path.GetFileName(selected.Source):"";OriginalPath.ToolTip=selected.Source;PackageLabel.Text="폴더 구조";
         PackageLayer.SetResourceReference(Border.BackgroundProperty,"Surface.Primary");PackageLayer.BorderThickness=new Thickness(0);TreeRows.Children.Clear();
         if(HasSelection&&selected.IsReal&&snapshot!=null)RenderScopeContext();
         else TreeRows.Children.Add(WorkText(scanning?"폴더를 확인하고 있습니다…":"‘탐색 위치’에서 게임이 있는 폴더를 추가하세요.",13,"Text.Muted"));
@@ -46,6 +47,7 @@ public partial class MainWindow
         SelectedState.SetResourceReference(ForegroundProperty,HasSelection&&IsAdded(selected)?"Success.Text":"Accent.Text");
         RetryPortableButton.Visibility=HasSelection&&portableErrors.ContainsKey(selected.Id)?Visibility.Visible:Visibility.Collapsed;
         if(RetryPortableButton.Visibility==Visibility.Visible){ShowOrganizeWarning("게임 정보 파일을 확인하지 못했습니다. 기존 게임과 설정은 유지됩니다.");OrganizeWarning.ToolTip=portableErrors[selected.Id];}
+        RecoverRenameButton.Visibility=RenamePending?Visibility.Visible:Visibility.Collapsed;if(RenamePending)ShowOrganizeWarning("폴더명 변경을 먼저 복구하세요.");
         RenderScopeEditActions();RenderPlan();
     }
     void ShowOrganizeWarning(string message){OrganizeWarningText.Text=message;OrganizeWarning.Visibility=Visibility.Visible;}
@@ -53,8 +55,8 @@ public partial class MainWindow
     {
         var offset=CandidateScroll.VerticalOffset;CandidateList.Children.Clear();CandidateReviewList.Children.Clear();
         organizeSelection.RemoveWhere(id=>!packages.Any(p=>p.Id==id&&!p.Excluded));
-        var query=Search.Text.Trim();var matching=packages.Where(p=>!p.Excluded&&p.ContentOwnerId.Length==0&&(p.Alias+p.Folder).Contains(query,StringComparison.OrdinalIgnoreCase)).ToList();CandidateCount.Text=$"{matching.Count}개";
-        foreach(var p in matching)
+        var query=Search.Text.Trim();var matching=packages.Where(p=>!p.Excluded&&!p.IsRelatedContent&&(p.Alias+p.Folder).Contains(query,StringComparison.OrdinalIgnoreCase)).ToList();CandidateCount.Text=$"{matching.Count}개";
+        foreach(var p in PageItems(matching,"organize",query,CandidateList,RenderCandidates))
         {
             var row=new Grid {Margin=new Thickness(0,0,0,8)};row.ColumnDefinitions.Add(new ColumnDefinition());row.ColumnDefinitions.Add(new ColumnDefinition {Width=new GridLength(48)});
             var body=new StackPanel();var header=new DockPanel {Height=26};
@@ -82,16 +84,18 @@ public partial class MainWindow
     }
     void RenderOrganizeFooter()
     {
+        OpenAddedButton.Visibility=recentlyAdded>0&&organizeSelection.Count==0&&scopeDraft==null?Visibility.Visible:Visibility.Collapsed;
         if(scopeDraft!=null)
         {
             PlanCount.Text="범위 수정 중";PlanHint.Text="게임 파일은 이동하지 않습니다.";PlanHint.Visibility=Visibility.Visible;
             AddGamesButton.Visibility=MovePickedButton.Visibility=ClearPickedButton.Visibility=ReviewButton.Visibility=ScopeUndoButton.Visibility=Visibility.Collapsed;return;
         }
         var chosen=packages.Where(p=>organizeSelection.Contains(p.Id)&&!p.Excluded).ToList();var add=chosen.Count(p=>!IsAdded(p));var move=chosen.Count(p=>IsAdded(p));
-        PlanCount.Text=chosen.Count>0?$"{chosen.Count}개 선택":"추가하거나 옮길 게임을 선택하세요";PlanHint.Visibility=chosen.Count>0?Visibility.Visible:Visibility.Collapsed;PlanHint.Text=chosen.Count==0?"":$"추가 {add}개 · 이동 {move}개";
-        var ready=!scanning&&!backupBusy&&!running&&!workspaceBlocked&&playerError.Length==0&&!File.Exists(Edits().Pending)&&!ScopeChanges().HasPending;
+        PlanCount.Text=chosen.Count>0?$"{chosen.Count}개 선택":"추가하거나 옮길 게임을 선택하세요";PlanHint.Visibility=chosen.Count>0?Visibility.Visible:Visibility.Collapsed;PlanHint.Text=chosen.Count==0?"":(move==0?"폴더 위치는 유지됩니다.":$"추가 {add}개 · 이동 {move}개");
+        var ready=!scanning&&!backupBusy&&!running&&!workspaceBlocked&&playerError.Length==0&&!File.Exists(Edits().Pending)&&!(ScopeChanges().HasPending||RenamePending);
         AddGamesButton.Content=add>0?$"게임 {add}개 추가":"선택한 게임 추가";AddGamesButton.Visibility=move>0&&add==0?Visibility.Collapsed:Visibility.Visible;AddGamesButton.IsEnabled=add>0&&ready&&scopeDraft==null;
         MovePickedButton.Content=$"게임 {move}개 옮기기";MovePickedButton.Visibility=move>0?Visibility.Visible:Visibility.Collapsed;MovePickedButton.IsEnabled=move>0&&ready&&scopeDraft==null&&chosen.Where(IsAdded).All(p=>p.ReviewState.Length==0);
+        if(recentlyAdded>0&&chosen.Count==0){PlanCount.Text=$"게임 {recentlyAdded}개 추가";PlanHint.Text="폴더 위치는 유지됩니다.";PlanHint.Visibility=Visibility.Visible;AddGamesButton.Visibility=Visibility.Collapsed;}
         ClearPickedButton.Visibility=chosen.Count>0?Visibility.Visible:Visibility.Collapsed;
         var planned=packages.Count(p=>!p.Excluded&&p.Planned&&!p.Done);ReviewButton.Visibility=planned>0?Visibility.Visible:Visibility.Collapsed;ReviewButton.Content=$"이동 계획 {planned}개 확인";ReviewButton.IsEnabled=ready&&scopeDraft==null;
         ScopeUndoButton.Visibility=page=="organize"&&history.Count>0&&scopeDraft==null?Visibility.Visible:Visibility.Collapsed;
@@ -139,11 +143,12 @@ public partial class MainWindow
             foreach(var p in packages.Where(IsAdded))PlayFor(p);
             try{new PlayerStore(destination).Save(playerDocument);}
             catch(Exception ex) when(LibraryFault(ex)){if(showErrors)ErrorInfo("실행 설정 저장","게임 추가는 유지했습니다. 실행 설정 저장을 다시 시도하세요.",ex.Message);}
-            Render();Say($"게임 {added}개 추가 · 폴더 위치 유지"+(failures.Count>0?$" · 확인 필요 {failures.Count}개":"")+(local>0?$" · 식별 파일 없이 등록 {local}개":""));
+            recentlyAdded=added;Render();Say($"게임 {added}개 추가 · 폴더 위치 유지"+(failures.Count>0?$" · 확인 필요 {failures.Count}개":"")+(local>0?$" · 식별 파일 없이 등록 {local}개":""));
             if(failures.Count>0&&showErrors)ErrorInfo("일부 게임 추가 확인","추가한 게임은 유지했습니다. 실패한 항목은 위치와 권한을 확인한 뒤 다시 시도하세요.",string.Join('\n',failures));
         }
         finally{running=false;Workbench.IsEnabled=true;FooterActions.IsEnabled=true;RescanButton.IsEnabled=true;foreach(var nav in navs)nav.IsEnabled=true;RenderPlan();}
     }
+    void OpenAdded_Click(object sender,RoutedEventArgs e){recentlyAdded=0;SetPage("play");RenderPlayer();}
     void MoveSelected_Click(object sender,RoutedEventArgs e)
     {if(HasSelection&&IsAdded(selected)&&scopeDraft==null&&!scanning&&!backupBusy&&!running&&selected.ReviewState.Length==0)ShowReadOnlyPlan([selected]);}
     void Organize_KeyDown(object sender,KeyEventArgs e)
@@ -165,8 +170,8 @@ public partial class MainWindow
         var children=new StackPanel {Margin=new Thickness(18,8,0,0)};
         if(snapshot!=null)
         {
-            var dirs=snapshot.Directories.Where(d=>p.Includes(d)&&string.Equals(Path.GetDirectoryName(d),p.Source,StringComparison.OrdinalIgnoreCase)).OrderBy(d=>d).Select(d=>Path.GetFileName(d)+"/");
-            var files=snapshot.Files.Where(f=>string.Equals(Path.GetDirectoryName(f.Path),p.Source,StringComparison.OrdinalIgnoreCase)&&Path.GetFileName(f.Path)!=LibraryStore.MarkerName).OrderBy(f=>f.Path).Select(f=>Path.GetFileName(f.Path));
+            var dirs=snapshot.DirectoriesUnder(p.Source).Where(d=>p.Includes(d)&&string.Equals(Path.GetDirectoryName(d),p.Source,StringComparison.OrdinalIgnoreCase)).OrderBy(d=>d).Select(d=>Path.GetFileName(d)+"/");
+            var files=snapshot.FilesUnder(p.Source).Where(f=>string.Equals(Path.GetDirectoryName(f.Path),p.Source,StringComparison.OrdinalIgnoreCase)&&Path.GetFileName(f.Path)!=LibraryStore.MarkerName).OrderBy(f=>f.Path).Select(f=>Path.GetFileName(f.Path));
             var names=dirs.Concat(files).ToList();foreach(var name in names.Take(12)){var label=OrganizeLabel(name,12,"Text.Secondary");label.Margin=new Thickness(0,0,0,6);children.Children.Add(label);}
             if(names.Count>12)children.Children.Add(WorkText($"그 외 {names.Count-12}개 항목",11,"Text.Muted"));
         }
@@ -182,8 +187,8 @@ public partial class MainWindow
         void Populate()
         {
             if(loaded||snapshot==null)return;loaded=true;
-            var dirs=snapshot.Directories.Concat(ScopeView.Contents.Select(c=>Path.Combine(ScopeView.Source,c.Path)).Where(Directory.Exists)).Where(d=>string.Equals(Path.GetDirectoryName(d),path,StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(d=>d,StringComparer.OrdinalIgnoreCase).ToList();
-            var files=snapshot.Files.Where(f=>string.Equals(Path.GetDirectoryName(f.Path),path,StringComparison.OrdinalIgnoreCase)&&Path.GetFileName(f.Path)!=LibraryStore.MarkerName).OrderBy(f=>Path.GetExtension(f.Path)==".exe"?0:1).ThenBy(f=>f.Path).ToList();
+            var dirs=snapshot.DirectoriesUnder(path).Concat(ScopeView.Contents.Select(c=>Path.Combine(ScopeView.Source,c.Path)).Where(Directory.Exists)).Where(d=>string.Equals(Path.GetDirectoryName(d),path,StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(d=>d,StringComparer.OrdinalIgnoreCase).ToList();
+            var files=snapshot.FilesUnder(path).Where(f=>string.Equals(Path.GetDirectoryName(f.Path),path,StringComparison.OrdinalIgnoreCase)&&Path.GetFileName(f.Path)!=LibraryStore.MarkerName).OrderBy(f=>Path.GetExtension(f.Path)==".exe"?0:1).ThenBy(f=>f.Path).ToList();
             foreach(var dir in dirs.Take(120))body.Children.Add(ScopeFolder(dir,depth+1));
             foreach(var f in files.Take(Math.Max(0,180-dirs.Count)))
             {
@@ -196,3 +201,4 @@ public partial class MainWindow
         return new Border {Child=expand,Padding=new Thickness(14,8,14,12),Margin=new Thickness(depth==0?0:10,depth==0?0:10,0,0),CornerRadius=new CornerRadius(8),Background=ThemeBrush(isScope?"Scope.Surface":"Surface.Primary"),BorderBrush=ThemeBrush(isScope?"Border.Focus":"Border.Subtle"),BorderThickness=new Thickness(isScope?1.5:1)};
     }
 }
+

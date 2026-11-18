@@ -10,6 +10,7 @@ public sealed class TagChange
 }
 public sealed class EditBundle
 {
+    public LibraryDocument? LibrarySeed {get;set;}
     public int Version { get; set; }=1;
     public WorkspaceDocument Plan { get; set; }=new();
     public TagCatalog Tags { get; set; }=new();
@@ -17,6 +18,7 @@ public sealed class EditBundle
     public List<string> EditedIds { get; set; }=[];
     public List<TagChange> TagChanges { get; set; }=[];
     public List<string> ReconnectedIds { get; set; }=[];
+    public List<string> RemovedIds {get;set;}=[];
     public List<string> ImportedIds {get;set;}=[];
 }
 // A durable intent is replayed after an interrupted multi-file edit. No game files are rewritten.
@@ -26,8 +28,8 @@ public sealed class EditTransaction(string dataRoot)
     internal Action<string>? Checkpoint { get; set; }
     static void Validate(EditBundle bundle)
     {
-        if(bundle.Version!=1||bundle.EditedIds==null||bundle.TagChanges==null||bundle.ReconnectedIds==null||bundle.ImportedIds==null||bundle.ImportedIds.Any(id=>!bundle.Plan.Packages.Any(p=>p.Id==id)||!bundle.Plan.Checkpoints.Any(c=>c.PackageId==id))||bundle.ReconnectedIds.Any(id=>!bundle.Plan.Packages.Any(p=>p.Id==id)||!bundle.Plan.Checkpoints.Any(c=>c.PackageId==id)))throw new InvalidDataException("편집 기록을 확인하세요.");
-        WorkspaceStore.Validate(bundle.Plan);PlayerStore.Validate(bundle.Play);
+        if(bundle.Version!=1||bundle.EditedIds==null||bundle.TagChanges==null||bundle.ReconnectedIds==null||bundle.ImportedIds==null||bundle.RemovedIds==null||bundle.RemovedIds.Any(id=>!BackupPaths.Id(id))||bundle.ImportedIds.Any(id=>!bundle.Plan.Packages.Any(p=>p.Id==id)||!bundle.Plan.Checkpoints.Any(c=>c.PackageId==id))||bundle.ReconnectedIds.Any(id=>!bundle.Plan.Packages.Any(p=>p.Id==id)||!bundle.Plan.Checkpoints.Any(c=>c.PackageId==id)))throw new InvalidDataException("편집 기록을 확인하세요.");
+        WorkspaceStore.Validate(bundle.Plan);PlayerStore.Validate(bundle.Play);if(bundle.LibrarySeed!=null)LibraryStore.Validate(bundle.LibrarySeed);
         if(bundle.Tags.Version!=1||bundle.Tags.Tags==null||bundle.Tags.Tags.Any(t=>t==null||string.IsNullOrWhiteSpace(t.Name)||t.Name.Length>40||t.Name.Any(char.IsControl)||t.Kind is not ("genre" or "category"))||bundle.Tags.Tags.GroupBy(t=>t.Id).Any(g=>g.Count()>1)||bundle.Tags.Tags.GroupBy(t=>(t.Kind,t.Name.ToUpperInvariant())).Any(g=>g.Count()>1))throw new InvalidDataException("태그 정보를 확인하세요.");
     }
     public void Commit(EditBundle bundle)
@@ -45,10 +47,12 @@ public sealed class EditTransaction(string dataRoot)
         new WorkspaceStore(Path.Combine(dataRoot,"workspace.json")).Save(bundle.Plan);Checkpoint?.Invoke("workspace");
         new PlayerStore(root).Save(bundle.Play);Checkpoint?.Invoke("play");
         var store=new LibraryStore(root);
-        if(bundle.ImportedIds.Count>0||File.Exists(Path.Combine(root,LibraryStore.JsonName))||File.Exists(Path.Combine(root,LibraryStore.JsonName+".bak")))
+        if(bundle.LibrarySeed!=null||bundle.ImportedIds.Count>0||bundle.RemovedIds.Count>0||File.Exists(Path.Combine(root,LibraryStore.JsonName))||File.Exists(Path.Combine(root,LibraryStore.JsonName+".bak")))
         {
             var result=store.Update(doc=>
             {
+                if(bundle.LibrarySeed!=null){doc.Games= bundle.LibrarySeed.Games;doc.Tags=bundle.LibrarySeed.Tags;}
+                doc.Games.RemoveAll(g=>bundle.RemovedIds.Contains(g.Id));
                 foreach(var change in bundle.TagChanges)
                 {
                     PlayerRules.ChangeTag([],doc,new TagDefinition {Id=change.Id,Kind=change.Kind,Name=change.OldName},change.NewName);
@@ -64,7 +68,7 @@ public sealed class EditTransaction(string dataRoot)
                 foreach(var p in bundle.Plan.Packages.Where(p=>bundle.EditedIds.Contains(p.Id)))
                 {
                     var game=doc.Games.Find(g=>g.Id==p.Id);if(game==null)continue;
-                    game.ContentOwnerId=p.ContentOwnerId;game.CompositionParentId=p.CompositionParentId;game.Alias=p.Alias;game.Genres=[..p.Genres];game.Categories=[..p.Categories];game.GenreIds=[..p.GenreIds];game.CategoryIds=[..p.CategoryIds];
+                    game.IsContent=p.IsRelatedContent;game.ContentOwnerId=p.ContentOwnerId;game.CompositionParentId=p.CompositionParentId;game.Alias=p.Alias;game.Genres=[..p.Genres];game.Categories=[..p.Categories];game.GenreIds=[..p.GenreIds];game.CategoryIds=[..p.CategoryIds];
                 }
                 foreach(var tag in bundle.Tags.Tags){var prior=doc.Tags.Find(t=>t.Id==tag.Id);if(prior==null)doc.Tags.Add(new TagDefinition {Id=tag.Id,Kind=tag.Kind,Name=tag.Name});else{prior.Name=tag.Name;prior.Kind=tag.Kind;}}
                 foreach(var id in bundle.ReconnectedIds)

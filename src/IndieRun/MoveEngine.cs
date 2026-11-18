@@ -164,7 +164,7 @@ public sealed partial class BackupEngine
     }
     public async Task<MoveJob> MoveAsync(string backupId,string destination,string batchId="",IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default)
     {
-        using var held=Acquire();var backup=Load(backupId);destination=Path.GetFullPath(destination);
+        using var held=Acquire();var backup=Load(backupId);if(Removed(backup))throw new IOException("삭제한 백업으로 이동할 수 없습니다.");destination=Path.GetFullPath(destination);
         Preflight([(backup.SourceRoot,destination)]);
         var move=new MoveJob {BackupId=backupId,BatchId=batchId,Source=backup.SourceRoot,Destination=destination,CrossVolume=ForceCopyMove||!Path.GetPathRoot(backup.SourceRoot)!.Equals(Path.GetPathRoot(destination),StringComparison.OrdinalIgnoreCase)};
         MoveState(move,"Running","Preparing");return await RunMove(backup,move,progress,cancellation);
@@ -239,7 +239,7 @@ public sealed partial class BackupEngine
     }
     public async Task<MoveJob> UndoMoveAsync(string backupId,string id,IProgress<BackupProgress>? progress=null,CancellationToken cancellation=default)
     {
-        using var held=Acquire();var move=LoadMove(backupId,id);var backup=Load(backupId);
+        using var held=Acquire();var move=LoadMove(backupId,id);var backup=Load(backupId);if(Removed(backup))throw new IOException("백업이 삭제되어 이동을 되돌릴 수 없습니다.");
         move.Action="Undo";MoveState(move,"Running","RollingBack");
         try{return await Undo(backup,move,progress,cancellation);}
         catch(Exception ex) when(Expected(ex)||ex is OperationCanceledException){try{MoveState(move,"RecoveryRequired","RollingBack",ex.Message);}catch(Exception log) when(Expected(log)){}throw;}

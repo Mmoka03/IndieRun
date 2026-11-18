@@ -12,6 +12,7 @@ public sealed class GameIdentity
 }
 public sealed class LibraryGame
 {
+    public bool IsContent {get;set;}
     public string ContentOwnerId {get;set;}="";
     public string CompositionParentId {get;set;}="";
     public string Id { get; set; }="";
@@ -81,11 +82,12 @@ public sealed class LibraryStore
         if(ReadIdentity(folder)?.GameId!=expectedId)throw new IOException("식별 정보가 변경됐습니다.");
         File.Replace(temp,path,path+".previous-"+Guid.NewGuid().ToString("N"),true);return marker.GameId;
     }
-    public static IdentityInventory Inspect(ScanSnapshot scan)
+    public static IdentityInventory Inspect(ScanSnapshot scan,CancellationToken token=default)
     {
         var result=new IdentityInventory();
         foreach(var file in scan.Files.Where(f=>Path.GetFileName(f.Path).Equals(MarkerName,StringComparison.OrdinalIgnoreCase)))
         {
+            token.ThrowIfCancellationRequested();
             var folder=Path.GetDirectoryName(file.Path)!;
             try
             {
@@ -97,7 +99,7 @@ public sealed class LibraryStore
         }
         return result;
     }
-    static void Validate(LibraryDocument doc)
+    internal static void Validate(LibraryDocument doc)
     {
         if(doc.Format!="IndieRun.Library"||doc.Version!=1||!BackupPaths.Id(doc.LibraryId)||doc.Games==null||doc.Tags==null||doc.Games.Count>100000)throw new InvalidDataException("지원하지 않는 보관함 형식입니다.");
         if(doc.Games.Any(g=>g==null||!BackupPaths.Id(g.Id)||!BackupPaths.Relative(g.Folder)||g.LastKnownPath==null||g.ContentOwnerId==null||g.CompositionParentId==null||g.ContentOwnerId.Length>0&&!BackupPaths.Id(g.ContentOwnerId)||g.CompositionParentId.Length>0&&!BackupPaths.Id(g.CompositionParentId)||g.Alias==null||g.Genres==null||g.Categories==null||g.GenreIds==null||g.CategoryIds==null||g.Executables==null||g.Status==null||g.Executables.Any(e=>!BackupPaths.Relative(e))||g.Genres.Any(s=>s==null)||g.Categories.Any(s=>s==null)))throw new InvalidDataException("보관함 게임 정보가 올바르지 않습니다.");
@@ -137,7 +139,7 @@ public sealed class LibraryStore
     }
     static void CopyMetadata(LibraryGame game,Package p,IEnumerable<TagDefinition> tags)
     {
-        game.ContentOwnerId=p.ContentOwnerId;game.CompositionParentId=p.CompositionParentId;game.Alias=p.Alias;game.Genres=[..p.Genres];game.Categories=[..p.Categories];
+        game.IsContent=p.IsRelatedContent;game.ContentOwnerId=p.ContentOwnerId;game.CompositionParentId=p.CompositionParentId;game.Alias=p.Alias;game.Genres=[..p.Genres];game.Categories=[..p.Categories];
         game.GenreIds=tags.Where(t=>t.Kind=="genre"&&p.Genres.Contains(t.Name)).Select(t=>t.Id).ToList();
         game.CategoryIds=tags.Where(t=>t.Kind=="category"&&p.Categories.Contains(t.Name)).Select(t=>t.Id).ToList();
     }
@@ -158,20 +160,21 @@ public sealed class LibraryStore
             }
         });
     }
-    public void Reconcile(LibraryDocument doc,IdentityInventory inventory,ScanSnapshot scan)
+    public void Reconcile(LibraryDocument doc,IdentityInventory inventory,ScanSnapshot scan,CancellationToken token=default)
     {
         foreach(var game in doc.Games)
         {
+            token.ThrowIfCancellationRequested();
             if(!inventory.Locations.TryGetValue(game.Id,out var paths)||paths.Count==0)
             {
                 var expected=game.LastKnownPath.Length>0?game.LastKnownPath:Path.Combine(Root,game.Folder);
-                game.Status=scan.UnreadablePaths.Any(p=>GameScanner.Within(p,expected)||GameScanner.Within(expected,p))?"Unavailable":scan.Directories.Contains(expected,StringComparer.OrdinalIgnoreCase)?"IdentityMissing":"Missing";continue;
+                game.Status=scan.UnreadablePaths.Any(p=>GameScanner.Within(p,expected)||GameScanner.Within(expected,p))?"Unavailable":scan.ContainsDirectory(expected)?"IdentityMissing":"Missing";continue;
             }
             if(paths.Count>1){game.Status="Duplicate";continue;}
             var path=paths[0];game.Status=GameScanner.Within(path,Root)?"Present":"External";
             if(GameScanner.Within(path,Root)&&!path.Equals(Root,StringComparison.OrdinalIgnoreCase))game.Folder=Path.GetRelativePath(Root,path);
             game.LastKnownPath=path;
-            game.Executables=scan.Files.Where(f=>GameScanner.Within(f.Path,path)&&Path.GetExtension(f.Path).Equals(".exe",StringComparison.OrdinalIgnoreCase)).Select(f=>Path.GetRelativePath(path,f.Path)).Order().ToList();
+            game.Executables=scan.FilesUnder(path).Where(f=>Path.GetExtension(f.Path).Equals(".exe",StringComparison.OrdinalIgnoreCase)).Select(f=>Path.GetRelativePath(path,f.Path)).Order().ToList();
         }
     }
     static string CsvCell(string value)

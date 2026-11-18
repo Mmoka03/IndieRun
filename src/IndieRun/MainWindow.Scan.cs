@@ -22,7 +22,11 @@ public partial class MainWindow
     async Task ScanAsync(string root,bool askDiscard)
     {if(scanning||running)return;await RefreshWorkspaceAsync(source,false,false);}
     static string FormatBytes(long bytes) => bytes>=1024L*1024*1024?$"{bytes/(1024d*1024*1024):0.##} GB":bytes>=1024*1024?$"{bytes/(1024d*1024):0.#} MB":bytes>=1024?$"{bytes/1024d:0.#} KB":$"{bytes} B";
-    List<ScannedFile> Executables(Package p) => snapshot?.Files.Where(f=>p.Includes(f.Path)&&Path.GetExtension(f.Path).Equals(".exe",StringComparison.OrdinalIgnoreCase)).ToList()??[];
+    List<ScannedFile> Executables(Package p)
+    {
+        if(snapshot==null)return [];
+        return snapshot.FilesUnder(p.Source).Where(f=>Path.GetExtension(f.Path).Equals(".exe",StringComparison.OrdinalIgnoreCase)&&p.Includes(f.Path)).ToList();
+    }
     bool CanIncludeParent()
     {
         if(!selected.IsReal||snapshot==null||IsAdded(selected)||selected.ReviewState.Length>0)return false;
@@ -114,62 +118,5 @@ public partial class MainWindow
         catch(Exception ex) when(ex is IOException or System.ComponentModel.Win32Exception){ErrorInfo("폴더 확인","폴더를 열지 못했습니다.",ex.Message);}
     }
     long PackageBytes(Package p)=>snapshot?.Files.Where(f=>p.Includes(f.Path)).Sum(f=>f.Length)??(long)Math.Ceiling(p.Gb*1024*1024*1024);
-    void ShowReadOnlyPlan(List<Package> list,string? targetRoot=null)
-    {
-        try{list=CompositionPlan.Moving(CompositionPlan.Expand(list,packages),targetRoot??destination);}catch(Exception ex) when(LibraryFault(ex)){ErrorInfo("구성 확인","게임 구성을 다시 확인하세요.",ex.Message);return;}
-        var moveTarget=targetRoot??destination;
-        var win=Modal("이동 계획 확인",840,720);var dock=new DockPanel {Margin=new Thickness(28)};
-        var header=new StackPanel();header.Children.Add(WorkText($"이동 대상 {list.Count}개 · 약 {FormatBytes(list.Sum(PackageBytes))}",21,"Text.Primary"));
-        var paths=new StackPanel {Margin=new Thickness(0,12,0,12)};
-        paths.Children.Add(WorkText("도착 위치",11,"Text.Muted"));var moveTargetPath=WorkText(moveTarget,12);moveTargetPath.TextTrimming=TextTrimming.CharacterEllipsis;moveTargetPath.TextWrapping=TextWrapping.NoWrap;moveTargetPath.ToolTip=moveTarget;var moveTargetRow=new DockPanel();var moveTargetChange=Btn("변경",()=>{});DockPanel.SetDock(moveTargetChange,Dock.Right);moveTargetRow.Children.Add(moveTargetChange);moveTargetRow.Children.Add(moveTargetPath);paths.Children.Add(moveTargetRow);
-        var backupRow=new DockPanel {Margin=new Thickness(0,10,0,0)};var change=Btn("변경",()=>{});DockPanel.SetDock(change,Dock.Right);backupRow.Children.Add(change);
-        var backupInfo=new StackPanel();backupInfo.Children.Add(WorkText("백업 위치",11,"Text.Muted"));var backupPath=WorkText(backupStorageRoot,12);backupPath.TextTrimming=TextTrimming.CharacterEllipsis;backupPath.TextWrapping=TextWrapping.NoWrap;backupPath.ToolTip=backupStorageRoot;backupInfo.Children.Add(backupPath);backupRow.Children.Add(backupInfo);paths.Children.Add(backupRow);header.Children.Add(paths);
-        var estimate=WorkText("",12);var storageDetails=WorkDetails("","드라이브별 여유 공간");header.Children.Add(estimate);header.Children.Add(storageDetails);
-        void UpdateStorage()
-        {
-            var total=list.Sum(PackageBytes);
-            var copy=list.Where(p=>p.OmittedFolders.Count>0||!string.Equals(Path.GetPathRoot(p.Source),Path.GetPathRoot(moveTarget),StringComparison.OrdinalIgnoreCase)).Sum(PackageBytes);
-            estimate.Text="추가 공간 예상 · 백업 "+FormatBytes(total)+(copy>0?" + 이동 복사 "+FormatBytes(copy):"");
-            var volumes=new Dictionary<string,long>(StringComparer.OrdinalIgnoreCase);void Add(string path,long bytes){var root=Path.GetPathRoot(Path.GetFullPath(path))!;volumes[root]=volumes.GetValueOrDefault(root)+bytes;}
-            Add(backupStorageRoot,total);if(copy>0)Add(moveTarget,copy);
-            var lines=new List<string>();foreach(var (root,bytes) in volumes){try{var free=new DriveInfo(root).AvailableFreeSpace;lines.Add(root+" · 필요 약 "+FormatBytes(bytes)+" / 사용 가능 "+FormatBytes(free)+(free<bytes?" · 공간 부족":""));}catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or ArgumentException){lines.Add(root+" · 여유 공간을 확인하지 못했습니다.");}}
-            storageDetails.Content=new ScrollViewer {Content=WorkText(string.Join("\n",lines),12),MaxHeight=90};
-        }
-        moveTargetChange.Click+=(_,_)=>{var picker=new Microsoft.Win32.OpenFolderDialog {Title="보관함으로 옮길 위치 선택",InitialDirectory=moveTarget};if(picker.ShowDialog(win)==true){win.Close();ShowReadOnlyPlan(list,picker.FolderName);}};
-        change.Click+=(_,_)=>{ChooseBackupRoot();backupPath.Text=backupStorageRoot;backupPath.ToolTip=backupStorageRoot;UpdateStorage();};UpdateStorage();
-        DockPanel.SetDock(header,Dock.Top);dock.Children.Add(header);
-        var footer=new StackPanel {Margin=new Thickness(0,18,0,0)};DockPanel.SetDock(footer,Dock.Bottom);
-        var warning=WorkText("게임을 종료한 뒤 진행하세요. 백업은 정상 작동 확인 후 직접 삭제하세요.",12,"Warning.Text");footer.Children.Add(warning);
-        if(list.Any(p=>p.Contents.Any(c=>c.Role=="exclude")))footer.Children.Add(WorkText("제외한 폴더는 현재 위치에 남습니다.",12,"Text.Secondary"));
-        footer.Children.Add(WorkText("별칭·태그·실행 설정과 이미지를 도착 위치에 함께 보관합니다.",12,"Text.Secondary"));
-        footer.Children.Add(WorkText("이동할 파일을 백업합니다. 일부 폴더를 남기는 이동은 같은 드라이브에서도 복사 공간이 필요합니다.",12,"Text.Muted"));
-        var buttons=new WrapPanel {HorizontalAlignment=HorizontalAlignment.Right,Margin=new Thickness(0,14,0,0)};
-        buttons.Children.Add(Btn("계속 편집",()=>win.Close()));
-        buttons.Children.Add(Btn("백업만 실행",async()=>{win.Close();await StartBackupBatchAsync(list);}));
-        var move=Btn("백업 후 이동",async()=>
-        {
-            var problems=list.Select(p=>BackupEngine.MoveNameError(p.Name)).FirstOrDefault(s=>s!=null);
-            if(problems!=null){warning.Text=problems;return;}
-            var paths=list.Select(p=>CompositionPlan.Target(p,moveTarget)).ToList();
-            if(paths.Any(path=>path.Any(ch=>ch>127))&&!Confirm("경로 문자 확인","경로에 한글·일본어 등이 포함되어 있어 일부 게임이 실행되지 않을 수 있습니다.","이 경로로 이동",string.Join('\n',paths),win))return;
-            win.Close();await StartMoveBatchAsync(list,moveTarget);
-        },true);
-        move.IsEnabled=!backupBusy&&!list.Any(p=>p.ReviewState.Length>0);buttons.Children.Add(move);
-        footer.Children.Add(buttons);dock.Children.Add(footer);
-        var rows=new StackPanel();foreach(var p in list)
-        {
-            var content=new StackPanel();content.Children.Add(Text(string.IsNullOrWhiteSpace(p.Alias)?p.Folder:p.Alias,16));
-            if(p.Contents.Count>0||p.RelatedFolders.Count>0)content.Children.Add(WorkText(CompositionPlan.Summary(p),12,"Text.Secondary"));
-            if(p.ContentOwnerId.Length>0)content.Children.Add(WorkText("관련 콘텐츠 · 본편과 연결",12,"Composition.Related.Text"));
-            var movePath=WorkText("",12);var route=new Expander {Header="이동 경로",Content=movePath,Margin=new Thickness(0,10,0,0)};route.SetResourceReference(ForegroundProperty,"Text.Muted");content.Children.Add(route);
-            var name=new TextBox {Text=p.Name,Margin=new Thickness(0,8,0,4),ToolTip="이동 후 폴더명 · 내부 폴더명은 유지됩니다"};
-            var structure=MoveStructure(p);
-            var nameStatus=WorkText("",12,"Warning.Text");
-            void CheckName(){structure.Header=p.Name+"/";var problem=BackupEngine.MoveNameError(p.Name);if(problem!=null){movePath.Text="원본: "+p.Source+"\n도착 위치: "+moveTarget;nameStatus.Text=problem;return;}var path=CompositionPlan.Target(p,moveTarget);movePath.Text="원본: "+p.Source+"\n도착: "+path;nameStatus.Text=File.Exists(path)||Directory.Exists(path)?"같은 이름이 있습니다 · 다른 이름을 입력하세요":ValidateName(p.Name);}
-            name.TextChanged+=(_,_)=>{p.Name=name.Text;CheckName();QueueWorkspaceSave();};CheckName();content.Children.Add(WorkText("이동 후 폴더명",11,"Text.Muted"));content.Children.Add(name);content.Children.Add(nameStatus);content.Children.Add(structure);
-            if(p.ReviewState.Length>0)content.Children.Add(Text("확인 필요: "+p.ReviewReason,12,"#A77B40"));
-            rows.Children.Add(new Border {Child=content,Padding=new Thickness(14),Background=ThemeBrush("Surface.Secondary"),CornerRadius=new CornerRadius(7),Margin=new Thickness(0,0,0,12)});
-        }
-        dock.Children.Add(new ScrollViewer {Content=rows});win.Content=dock;win.ShowDialog();Render();
-    }
+    void ShowReadOnlyPlan(List<Package> list,string? targetRoot=null)=>OpenMovePlan(list,targetRoot??destination);
 }

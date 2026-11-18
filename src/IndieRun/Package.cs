@@ -2,6 +2,8 @@
 namespace IndieRun;
 public sealed class Package
 {
+    public bool IsContent {get;set;}
+    [JsonIgnore] public bool IsRelatedContent=>IsContent||ContentOwnerId.Length>0;
     public List<FolderAssignment> Contents {get;set;}=[];
     public List<RelatedFolder> RelatedFolders {get;set;}=[];
     public List<string> OmittedFolders {get;set;}=[];
@@ -13,7 +15,7 @@ public sealed class Package
     public void ValidateComposition()
     {
         bool Relative(string r)=>!string.IsNullOrWhiteSpace(r)&&!System.IO.Path.IsPathRooted(r)&&r.Split('\\','/').All(c=>c.Length>0&&c is not ("." or "..")&&c.IndexOfAny(System.IO.Path.GetInvalidFileNameChars())<0);
-        if(Contents==null||RelatedFolders==null||OmittedFolders==null||PlannedContainer==null||(PlannedContainer.Length>0&&!Relative(PlannedContainer))||ContentOwnerId==null||CompositionParentId==null||(ContentOwnerId.Length>0&&!Guid.TryParseExact(ContentOwnerId,"N",out _))||(CompositionParentId.Length>0&&!Guid.TryParseExact(CompositionParentId,"N",out _))||Contents.Count>1000||RelatedFolders.Count>1000||Contents.Any(c=>c==null||!Relative(c.Path)||c.Role is not ("related" or "game" or "exclude")||!Guid.TryParseExact(c.Id,"N",out _))||OmittedFolders.Any(r=>!Relative(r))||RelatedFolders.Any(r=>r==null||!Guid.TryParseExact(r.Id,"N",out _)||!System.IO.Path.IsPathFullyQualified(r.Source)||string.IsNullOrWhiteSpace(r.Name)||r.Name.IndexOfAny(System.IO.Path.GetInvalidFileNameChars())>=0||r.Name is "." or "..")||Contents.GroupBy(c=>c.Path,StringComparer.OrdinalIgnoreCase).Any(g=>g.Count()>1)||RelatedFolders.GroupBy(r=>r.Id).Any(g=>g.Count()>1))throw new System.IO.InvalidDataException("게임 구성 정보를 확인하세요.");
+        if(Contents==null||RelatedFolders==null||OmittedFolders==null||PlannedContainer==null||(PlannedContainer.Length>0&&!Relative(PlannedContainer))||ContentOwnerId==null||CompositionParentId==null||(ContentOwnerId.Length>0&&!Guid.TryParseExact(ContentOwnerId,"N",out _))||(CompositionParentId.Length>0&&!Guid.TryParseExact(CompositionParentId,"N",out _))||Contents.Count>1000||RelatedFolders.Count>1000||Contents.Any(c=>c==null||c.Alias==null||c.Alias.Length>120||!Relative(c.Path)||c.Role is not ("related" or "game" or "exclude")||!Guid.TryParseExact(c.Id,"N",out _))||OmittedFolders.Any(r=>!Relative(r))||RelatedFolders.Any(r=>r==null||r.Alias==null||r.Alias.Length>120||!Guid.TryParseExact(r.Id,"N",out _)||!System.IO.Path.IsPathFullyQualified(r.Source)||string.IsNullOrWhiteSpace(r.Name)||r.Name.IndexOfAny(System.IO.Path.GetInvalidFileNameChars())>=0||r.Name is "." or "..")||Contents.GroupBy(c=>c.Path,StringComparer.OrdinalIgnoreCase).Any(g=>g.Count()>1)||RelatedFolders.GroupBy(r=>r.Id).Any(g=>g.Count()>1))throw new System.IO.InvalidDataException("게임 구성 정보를 확인하세요.");
     }
     // Null is a legacy workspace entry, which was already visible in the player.
     public bool? Registered { get; set; }
@@ -53,12 +55,14 @@ public sealed class Package
 
 public sealed class FolderAssignment
 {
+    public string Alias {get;set;}="";
     public string Path {get;set;}="";
     public string Role {get;set;}="related";
     public string Id {get;set;}=Guid.NewGuid().ToString("N");
 }
 public sealed class RelatedFolder
 {
+    public string Alias {get;set;}="";
     public string Id {get;set;}=Guid.NewGuid().ToString("N");
     public string Source {get;set;}="";
     public string Name {get;set;}="";

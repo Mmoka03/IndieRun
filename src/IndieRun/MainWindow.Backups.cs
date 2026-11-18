@@ -16,7 +16,7 @@ public partial class MainWindow
     CancellationTokenSource? backupCancellation;
     ProgressBar? backupLiveBar;
     double backupPercent;
-    static string BackupState(string value)=>value switch {"Preparing"=>"준비 중","Copying"=>"백업 중","Verifying"=>"백업 확인 중","Completed"=>"백업 완료","Interrupted"=>"중단됨","Cancelled"=>"취소됨","Failed"=>"실패","Invalid"=>"검증 실패","RecordError"=>"기록 확인 필요","Restoring"=>"복원 중","Moving"=>"이동 중","RollingBack"=>"원래 위치 복구 중",_=>value};
+    static string BackupState(string value)=>value switch {"Preparing"=>"준비 중","Copying"=>"백업 중","Verifying"=>"백업 확인 중","Completed"=>"백업 완료","Interrupted"=>"중단됨","Cancelled"=>"취소됨","Failed"=>"실패","Invalid"=>"검증 실패","RecordError"=>"기록 확인 필요","Deleting"=>"삭제 중단","DeleteFailed"=>"삭제 확인 필요","Deleted"=>"백업 삭제됨","Restoring"=>"복원 중","Moving"=>"이동 중","RollingBack"=>"원래 위치 복구 중",_=>value};
     BackupEngine BackupService()=>new(backupStorageRoot);
     async Task RecoverBackupsAsync()
     {
@@ -30,6 +30,7 @@ public partial class MainWindow
     }
     void ChooseBackupRoot()
     {
+        if(RenamePending){Info("이름 변경 복구","진행 중인 이름 변경을 먼저 완료하거나 되돌리세요.");return;}
         if(backupBusy)return;
         try
         {
@@ -45,17 +46,20 @@ public partial class MainWindow
     {
         JobsContent.Children.Clear();RenderOperationSummary();
         var heading=new DockPanel {Margin=new Thickness(0,0,0,14)};
+        if(BatchRenames().HasPending||File.Exists(BatchRenames().Last)){var names=Btn("이름 변경 기록",()=>ShowRenameProgress());names.IsEnabled=!backupBusy;DockPanel.SetDock(names,Dock.Right);heading.Children.Add(names);}
+        var manage=Btn("백업 관리",ShowBackupManager);manage.IsEnabled=!backupBusy;DockPanel.SetDock(manage,Dock.Right);heading.Children.Add(manage);
         var change=Btn("백업 위치 변경",()=>{ChooseBackupRoot();RenderBackupJobs();});change.IsEnabled=!backupBusy;DockPanel.SetDock(change,Dock.Right);heading.Children.Add(change);
         var folder=Btn("폴더 열기",()=>OpenSourceFolder(backupStorageRoot));folder.IsEnabled=Directory.Exists(backupStorageRoot);DockPanel.SetDock(folder,Dock.Right);heading.Children.Add(folder);
-        heading.Children.Add(new TextBlock {Text=backupStorageRoot,FontSize=12,Foreground=ThemeBrush("Text.Muted"),TextTrimming=TextTrimming.CharacterEllipsis,ToolTip=backupStorageRoot,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,18,0)});JobsContent.Children.Add(heading);
+        heading.Children.Add(new TextBlock {Text="백업 위치 · "+Path.GetFileName(Path.TrimEndingDirectorySeparator(backupStorageRoot)),FontSize=12,Foreground=ThemeBrush("Text.Muted"),TextTrimming=TextTrimming.CharacterEllipsis,ToolTip=backupStorageRoot,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,18,0)});JobsContent.Children.Add(heading);
         List<BackupJob> jobs;var service=BackupService();
         try{jobs=service.ListJobs(!backupBusy);}catch(Exception ex) when(ex is IOException or InvalidDataException or UnauthorizedAccessException){JobsContent.Children.Add(WorkText("백업 기록을 읽지 못했습니다.",13,"Warning.Text"));JobsContent.Children.Add(WorkDetails(ex.Message));return;}
-        var pendingMoves=RenderMoveJobs(service,jobs,JobsContent,true);
+        RenderMoveJobs(service,jobs,JobsContent,true);
+        var deleteIssues=jobs.Count(j=>j.Status is "Deleting" or "DeleteFailed");if(deleteIssues>0)manage.Content=$"백업 관리 · 삭제 확인 {deleteIssues}개";
         var completedRecords=new StackPanel();var completedMoves=RenderMoveJobs(service,jobs,completedRecords,false);
         if(jobs.Count==0){JobsContent.Children.Add(WorkText(backupBusy?"작업 기록을 준비하고 있습니다.":"아직 백업이 없습니다.",13,"Text.Muted"));return;}
-        JobsContent.Children.Add(new TextBlock {Text=$"백업 {jobs.Count}개 · 완료 {jobs.Count(j=>j.Status=="Completed")}개 · {jobs.Where(j=>j.Status=="Completed").Sum(j=>j.TotalBytes)/(1024d*1024*1024):0.##} GB",FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,18)});
-        var needsAttention=false;var completedBackups=0;
-        foreach(var job in jobs)
+        JobsContent.Children.Add(new TextBlock {Text=$"백업 {jobs.Count(j=>j.Status!="Deleted")}개 · {FormatBytes(jobs.Where(j=>j.Status=="Completed").Sum(j=>j.TotalBytes))}",FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,18)});
+        var completedBackups=0;
+        foreach(var job in jobs.Where(j=>!BackupEngine.Removed(j)))
         {
             var card=new StackPanel();var title=string.IsNullOrWhiteSpace(job.Package.Alias)?job.OriginalFolder:job.Package.Alias;
             card.Children.Add(Text(title,18));card.Children.Add(new TextBlock {Text=$"{BackupState(job.Status)} · {job.Files.Count}개 파일 · {FormatBytes(job.TotalBytes)}",Foreground=ThemeBrush(job.Status=="Completed"?"Success.Text":"Warning.Text"),Margin=new Thickness(0,6,0,8),FontSize=12});
@@ -85,11 +89,11 @@ public partial class MainWindow
                 foreach(Button button in restoreActions.Children){button.IsEnabled=!backupBusy;button.Margin=new Thickness(0,0,8,6);}row.Children.Add(restoreActions);card.Children.Add(row);
             }
             var attention=job.Status!="Completed"||service.ListRestores(job.Id).Any(r=>r.Status!="Completed");
-            if(attention){needsAttention=true;JobsContent.Children.Add(WorkCard(card));}
+            if(attention){JobsContent.Children.Add(WorkCard(card));}
             else{completedBackups++;completedRecords.Children.Add(WorkCard(card));}
         }
-        if(completedRecords.Children.Count>0){var history=new Expander {Header=$"완료 기록 · 이동 {completedMoves}건 · 백업 {completedBackups}개",Content=completedRecords,IsExpanded=!needsAttention&&pendingMoves==0,Margin=new Thickness(0,4,0,16)};history.SetResourceReference(ForegroundProperty,"Text.Secondary");JobsContent.Children.Add(history);}
-        JobsContent.Children.Add(WorkText("게임이 정상 작동하는지 확인한 뒤 ‘백업 폴더’에서 해당 백업을 직접 삭제하세요.",12,"Text.Muted"));
+        if(completedRecords.Children.Count>0){var history=new Expander {Header="완료 기록"+(completedMoves>0?$" · 이동 {completedMoves}건":"")+(completedBackups>0?$" · 백업 {completedBackups}개":""),Content=completedRecords,IsExpanded=false,Margin=new Thickness(0,4,0,16)};history.SetResourceReference(ForegroundProperty,"Text.Secondary");JobsContent.Children.Add(history);}
+        JobsContent.Children.Add(WorkText("백업 관리에서 용량을 확인하고, 필요한 백업만 남길 수 있습니다.",12,"Text.Muted"));
     }
     async Task StartBackupBatchAsync(List<Package> list)
     {
@@ -151,3 +155,6 @@ public partial class MainWindow
         await Dispatcher.InvokeAsync(Close);
     }
 }
+
+
+

@@ -27,7 +27,7 @@ public static class IdentityReconciler
             var paths=inventory.Locations.GetValueOrDefault(game.Id);
             var path=paths?.Count==1?paths[0]:Path.Combine(libraryRoot,game.Folder);
             if(packages.Any(p=>GameScanner.Within(path,p.Source)||GameScanner.Within(p.Source,path)))continue;
-            var p=new Package {IsReal=true,Id=game.Id,Source=path,SearchRoot=Path.GetDirectoryName(path)!,DetectedRoot=path,Folder=Path.GetFileName(path),Name=Path.GetFileName(path),Alias=game.Alias,ContentOwnerId=game.ContentOwnerId,CompositionParentId=game.CompositionParentId,Genres=[..game.Genres],Categories=[..game.Categories],GenreIds=[..game.GenreIds],CategoryIds=[..game.CategoryIds]};
+            var p=new Package {IsReal=true,Id=game.Id,Source=path,SearchRoot=Path.GetDirectoryName(path)!,DetectedRoot=path,Folder=Path.GetFileName(path),Name=Path.GetFileName(path),Alias=game.Alias,IsContent=game.IsContent,ContentOwnerId=game.ContentOwnerId,CompositionParentId=game.CompositionParentId,Genres=[..game.Genres],Categories=[..game.Categories],GenreIds=[..game.GenreIds],CategoryIds=[..game.CategoryIds]};
             var executable=game.Executables.FirstOrDefault();if(executable!=null)p.DetectedRoot=Path.GetDirectoryName(Path.Combine(path,executable))!;
             packages.Add(p);
             if(paths?.Count==1)checkpoints.Add(WorkspaceReconciler.Capture(p,scan));
