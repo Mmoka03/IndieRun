@@ -50,13 +50,24 @@ public partial class MainWindow
         var advanced=new Expander{Header="배치 옵션",Margin=new Thickness(0,20,0,0),Visibility=Visibility.Collapsed};var together=new CheckBox{Content="본편과 같은 폴더 아래에 모으기",Margin=new Thickness(0,12,0,0)};advanced.Content=together;right.Children.Add(advanced);
         var detach=Btn("연결 해제",()=>{});detach.Margin=new Thickness(0,14,0,0);detach.Visibility=Visibility.Collapsed;detach.HorizontalAlignment=HorizontalAlignment.Left;right.Children.Add(detach);
         right.Children.Add(WorkDetails("본편의 내부 파일은 그대로 유지됩니다. DLL·데이터 폴더를 제외하면 실행되지 않을 수 있습니다. 제외한 폴더는 원래 위치에 남고, 별도 게임은 독립된 폴더로 이동합니다. 연결을 해제해도 파일을 삭제하지 않습니다.","구성 안내"));
+        CompositionConflictException? conflict=null;
+        var inspect=Btn("겹치는 항목 보기",()=>
+        {
+            if(conflict==null)return;
+            var other=conflict.Other;
+            var answer=Choose("범위 확인",PlayerRules.Title(other)+" 항목과 범위가 겹칩니다.",
+                [new("close","닫기"),new("show","정리에서 보기",true)],"close",FolderPolicy.ConflictDetails(other,conflict.Folder),DialogTone.Warning,win);
+            if(answer!="show"||!Confirm("구성 수정 취소","적용하지 않은 구성을 취소하고 해당 항목으로 이동할까요?","수정 취소 후 보기",owner:win))return;
+            accepted=true;win.Close();ReviewHistoryGame(other.Id);
+        });inspect.Visibility=Visibility.Collapsed;inspect.HorizontalAlignment=HorizontalAlignment.Left;inspect.Margin=new Thickness(0,8,0,0);right.Children.Insert(right.Children.Count-1,inspect);
+        void ShowProblem(Exception ex){conflict=ex as CompositionConflictException;note.Text=ex.Message;inspect.Visibility=conflict==null?Visibility.Collapsed:Visibility.Visible;}
         string chosen=draft.Source;RelatedFolder? external=null;bool updating=false;
         var childrenByParent=scan.Directories.Distinct(StringComparer.OrdinalIgnoreCase).Where(d=>Path.GetDirectoryName(d)!=null).GroupBy(d=>Path.GetDirectoryName(d)!,StringComparer.OrdinalIgnoreCase).ToDictionary(g=>g.Key,g=>g.OrderBy(d=>d,StringComparer.OrdinalIgnoreCase).ToList(),StringComparer.OrdinalIgnoreCase);
         var visibleChildCounts=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
         void UpdateSummary(){summary.Text=CompositionPlan.Summary(draft);apply.IsEnabled=JsonSerializer.Serialize(draft)!=initial&&!busy;}
         void ShowChoice(string path,RelatedFolder? related=null)
         {
-            updating=true;chosen=path;external=related;folderTitle.Text=Path.GetFileName(path);folderTitle.ToolTip=path;folderPath.Text=path;folderPath.ToolTip=path;rolePanel.Children.Clear();note.Text="";
+            updating=true;chosen=path;external=related;folderTitle.Text=Path.GetFileName(path);folderTitle.ToolTip=path;folderPath.Text=path;folderPath.ToolTip=path;rolePanel.Children.Clear();note.Text="";conflict=null;inspect.Visibility=Visibility.Collapsed;
             advanced.Visibility=detach.Visibility=related!=null?Visibility.Visible:Visibility.Collapsed;together.IsChecked=related?.Together==true;
             if(related!=null){rolePanel.Children.Add(OrganizeChip("관련 콘텐츠","Composition.Related"));note.Text=ContentLinks.Owners(packages,related.Id).Count>1?"공유 자료 · 기본 이동 대상에서 제외됩니다.":"별도 폴더로 유지하며 본편과 연결합니다.";}
             else
@@ -67,7 +78,7 @@ public partial class MainWindow
                     var button=Btn(role=="main"?"본편에 포함":CompositionPlan.Label(role),()=>
                     {
                         try{CompositionPlan.Assign(draft,path,role,playerDocument.Games.Find(g=>g.Id==original.Id)??new(),scan);foreach(var part in draft.Contents){var prior=original.Contents.Find(c=>c.Path.Equals(part.Path,StringComparison.OrdinalIgnoreCase));if(prior!=null)part.Id=prior.Id;}Rebuild();ShowChoice(path);UpdateSummary();}
-                        catch(Exception ex) when(LibraryFault(ex)){note.Text=ex.Message;}
+                        catch(Exception ex) when(LibraryFault(ex)){ShowProblem(ex);}
                     });button.Margin=new Thickness(0,0,0,8);button.HorizontalContentAlignment=HorizontalAlignment.Left;button.Padding=new Thickness(13,11,13,11);
                     if(active==role){button.Background=ThemeBrush(CompositionPlan.Color(role)+".Surface");button.Foreground=ThemeBrush(CompositionPlan.Color(role)+".Text");button.BorderBrush=ThemeBrush("Border.Focus");}
                     rolePanel.Children.Add(button);
@@ -119,17 +130,17 @@ public partial class MainWindow
                 scan.InvalidateIndex();scan.Files.RemoveAll(f=>GameScanner.Within(f.Path,path));scan.Files.AddRange(extra.Files);scan.Directories.AddRange(extra.Directories.Where(d=>!scan.Directories.Contains(d,StringComparer.OrdinalIgnoreCase)));
                 var related=new RelatedFolder{Source=path,Name=Path.GetFileName(path)};draft.RelatedFolders.Add(related);
                 // Validate before adding a visible connection; cancel still has no persistent effects.
-                try{CompositionPlan.Apply(draft,packages,scan);}catch{draft.RelatedFolders.Remove(related);throw;}
+                try{CompositionPlan.Apply(draft,packages,scan,playerDocument.Games.Where(LaunchPathRepair.HasSettings).Select(g=>g.Id).ToHashSet());}catch{draft.RelatedFolders.Remove(related);throw;}
                 Rebuild();ShowChoice(path,related);
             }
-            catch(Exception ex) when(LibraryFault(ex)){note.Text=ex.Message;}
+            catch(Exception ex) when(LibraryFault(ex)){ShowProblem(ex);}
             finally{busy=false;cancel.IsEnabled=addRelated.IsEnabled=true;UpdateSummary();}
         };
         apply.Click+=(_,_)=>
         {
             try
             {
-                var next=CompositionPlan.Apply(draft,packages,scan);var plan=Clone(CaptureWorkspace());plan.Packages=next;plan.Checkpoints.RemoveAll(c=>!next.Any(p=>p.Id==c.PackageId)||c.PackageId==draft.Id);plan.Checkpoints.Add(WorkspaceReconciler.Capture(next.Single(p=>p.Id==draft.Id),scan));foreach(var added in next.Where(p=>!plan.Checkpoints.Any(c=>c.PackageId==p.Id)))plan.Checkpoints.Add(WorkspaceReconciler.Capture(added,scan));
+                var next=CompositionPlan.Apply(draft,packages,scan,playerDocument.Games.Where(LaunchPathRepair.HasSettings).Select(g=>g.Id).ToHashSet());var plan=Clone(CaptureWorkspace());plan.Packages=next;plan.Checkpoints.RemoveAll(c=>!next.Any(p=>p.Id==c.PackageId)||c.PackageId==draft.Id);plan.Checkpoints.Add(WorkspaceReconciler.Capture(next.Single(p=>p.Id==draft.Id),scan));foreach(var added in next.Where(p=>!plan.Checkpoints.Any(c=>c.PackageId==p.Id)))plan.Checkpoints.Add(WorkspaceReconciler.Capture(added,scan));
                 foreach(var related in draft.RelatedFolders)if(searchLocations.Any(l=>!l.Enabled&&GameScanner.Within(related.Source,l.Path)))throw new IOException("연결할 자료 위치의 탐색을 먼저 켜주세요.");
                 foreach(var related in draft.RelatedFolders)if(!searchLocations.Any(l=>l.Enabled&&GameScanner.Within(related.Source,l.Path)))SearchLocationRules.Add(plan.SearchLocations!,related.Source);
                 if(draft.OmittedFolders.Except(original.OmittedFolders,StringComparer.OrdinalIgnoreCase).Any()&&!Confirm("구성 확인","별도 게임은 따로 이동하고, 제외한 폴더는 현재 위치에 남습니다. 실행에 필요한 폴더인지 확인하세요.","구성 적용",owner:win))return;
@@ -137,7 +148,7 @@ public partial class MainWindow
                 if(!CommitPlayerEdit(next,CopyCatalog(),Clone(playerDocument),edited,prepared:plan,reconnectedScan:scan))return;
                 accepted=true;win.Close();Render();Say("구성을 적용했습니다 · 파일은 이동하지 않았습니다.");
             }
-            catch(Exception ex) when(LibraryFault(ex)){note.Text=ex.Message;}
+            catch(Exception ex) when(LibraryFault(ex)){ShowProblem(ex);}
         };
         win.Closing+=(_,e)=>{if(busy){e.Cancel=true;return;}if(!accepted&&JsonSerializer.Serialize(draft)!=initial&&!Confirm("구성 수정 취소","적용하지 않은 구성 수정이 있습니다.","수정 취소",owner:win))e.Cancel=true;};
         Rebuild();ShowChoice(draft.Source);win.Content=root;return win;

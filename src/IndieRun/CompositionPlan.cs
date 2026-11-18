@@ -2,6 +2,12 @@ using System.IO;
 using System.Text.Json;
 namespace IndieRun;
 
+public sealed class CompositionConflictException(Package other,string path) : IOException("다른 항목과 폴더 범위가 겹칩니다.")
+{
+    public Package Other {get;}=other;
+    public string Folder {get;}=path;
+}
+
 public static class CompositionPlan
 {
     public static string? AnchorProblem(Package p,GamePlay? play=null)
@@ -30,7 +36,7 @@ public static class CompositionPlan
         if(role!="main")p.Contents.Add(new(){Path=rel,Role=role,Id=prior?.Id??Guid.NewGuid().ToString("N")});
         p.OmittedFolders=p.Contents.Where(c=>c.Role is "game" or "exclude").Select(c=>c.Path).ToList();
     }
-    public static List<Package> Apply(Package draft,List<Package> current,ScanSnapshot scan)
+    public static List<Package> Apply(Package draft,List<Package> current,ScanSnapshot scan,ISet<string>? protectedIds=null)
     {
         draft.ValidateComposition();draft.ScopeReviewRequired=false;var result=Copy(current);var index=result.FindIndex(p=>p.Id==draft.Id);if(index<0)throw new IOException("선택한 게임을 찾지 못했습니다.");
         var old=result[index];
@@ -47,7 +53,11 @@ public static class CompositionPlan
         foreach(var part in draft.Contents.Where(c=>c.Role is "game" or "exclude"))
         {
             var path=BackupPaths.Child(draft.Source,part.Path);var existing=result.Find(p=>p.Id==part.Id||p.Source.Equals(path,StringComparison.OrdinalIgnoreCase));
-            if(result.Any(p=>p.Id!=draft.Id&&p!=existing&&p.Includes(path)))throw new IOException("다른 게임과 폴더 범위가 겹칩니다.");
+            // Discovery candidates can overlap before registration. Use the same ownership
+            // rules as scope editing; never discard a registered or explicitly configured scope.
+            var conflict=result.FirstOrDefault(p=>p.Id!=draft.Id&&p!=existing&&p.Includes(path)
+                &&(protectedIds?.Contains(p.Id)==true||!FolderPolicy.UnownedAncestor(p,draft.Source)&&!FolderPolicy.Redundant(p,draft.Source,scan)&&!FolderPolicy.VerifiedMissing(p.Source,scan)));
+            if(conflict!=null)throw new CompositionConflictException(conflict,path);
             if(existing!=null&&existing.Id!=part.Id){part.Id=existing.Id;result.Find(p=>p.Id==draft.Id)!.Contents.Find(c=>c.Path==part.Path)!.Id=existing.Id;}
             var marker=LibraryStore.ReadIdentity(path);if(marker!=null&&marker.GameId!=existing?.Id)throw new IOException("별도 폴더에 기존 식별 정보가 있습니다. 먼저 게임으로 추가해 확인하세요.");
             if(existing==null){existing=New(path,draft,part.Id,scan);result.Add(existing);}
@@ -59,7 +69,8 @@ public static class CompositionPlan
             var existing=result.Find(p=>p.Id==related.Id||p.Source.Equals(related.Source,StringComparison.OrdinalIgnoreCase));
             if(existing!=null&&(existing.RelatedFolders.Count>0||existing.Contents.Count>0))throw new IOException("다른 구성에 연결된 폴더입니다. 기존 연결을 먼저 확인하세요.");
             if(existing!=null&&!existing.IsRelatedContent&&GameRegistration.IsAdded(existing))throw new IOException("이미 추가한 게임은 관련 콘텐츠로 바꾸지 않습니다.");
-            if(result.Any(p=>p.Id!=draft.Id&&p!=existing&&(p.Includes(related.Source)||GameScanner.Within(p.Source,related.Source))))throw new IOException("다른 게임이나 관련 콘텐츠와 범위가 겹칩니다.");
+            var conflict=result.FirstOrDefault(p=>p.Id!=draft.Id&&p!=existing&&(FolderPolicy.Conflict(draft,p,related.Source,scan)||protectedIds?.Contains(p.Id)==true&&FolderPolicy.ScopeOverlap(draft,p,related.Source)));
+            if(conflict!=null)throw new CompositionConflictException(conflict,related.Source);
             var marker=LibraryStore.ReadIdentity(related.Source);if(marker!=null&&marker.GameId!=existing?.Id)throw new IOException("기존 식별 정보가 있는 폴더입니다. 먼저 등록 상태를 확인하세요.");
             if(existing==null){existing=New(related.Source,draft,related.Id,scan);result.Add(existing);}else{related.Id=existing.Id;result.Find(p=>p.Id==draft.Id)!.RelatedFolders.Find(r=>r.Source==related.Source)!.Id=existing.Id;}
             existing.IsContent=true;existing.ContentOwnerId=draft.Id;existing.CompositionParentId=draft.Id;existing.Excluded=false;
